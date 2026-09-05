@@ -248,20 +248,33 @@ export async function runProfile(options: RunProfileOptions): Promise<{ ctx: Con
   ])
   // Cloned for the same insert-aliasing reason as composeLive: the boot
   // application must not mutate the objects later reloads recompose from.
-  const ctx = await boot(NAME, rootConfig, structuredClone(allPatches(composed)), (hostCtx) => {
-    app.current = hostCtx
-    // Before any config-tree entry mounts, so plugins resolve all launch-time
-    // environment values from the same immutable provenance snapshot.
-    hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, options.environment)
-    // The command line and bounded exit request are launcher facts available
-    // to every app plugin that injects the argument snapshot.
-    provideCmdline(hostCtx, {
-      args: options.args,
-      exit: code => void shutdown.shutdown(code),
-      ready: appReady.service,
-    })
-  })
+  const ctx = await boot(
+    NAME,
+    rootConfig,
+    structuredClone(allPatches(composed)),
+    (hostCtx) => {
+      app.current = hostCtx
+      // Before any config-tree entry mounts, so plugins resolve all launch-time
+      // environment values from the same immutable provenance snapshot.
+      hostCtx.provide(DSH_LAUNCH_ENVIRONMENT_KEY, options.environment)
+      // The command line and bounded exit request are launcher facts available
+      // to every app plugin that injects the argument snapshot.
+      provideCmdline(hostCtx, {
+        args: options.args,
+        exit: code => void shutdown.shutdown(code),
+        ready: appReady.service,
+      })
+    },
+    undefined,
+    {
+      faultTolerance: 'safe-mode',
+      essentialEntries: ['include', 'dsh-api-gateway', 'dsh-client-connection'],
+    },
+  )
   app.current = ctx
+  if (ctx.quarantine?.isSafeMode) {
+    process.stderr.write(ctx.quarantine.formatSummary() + '\n')
+  }
   // A live-reload profile can dispose the whole tree while post-boot watcher
   // setup is in flight — a signal or appExit. Loader presence and fiber state
   // own liveness; the initial check skips a tree that already exited, and the

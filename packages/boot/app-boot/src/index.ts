@@ -12,13 +12,13 @@ import { parseEnv } from 'node:util'
 import { basename, dirname, isAbsolute, resolve } from 'node:path'
 import * as yaml from 'js-yaml'
 import { Context, type FiberState } from '@deepseek-ai/cordis'
-import Loader, { type Entry, type EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
+import Loader, { EntryGroup, EntryTree, type Entry, type EntryOptions } from '@deepseek-ai/cordis-plugin-loader'
 import Include, { applyEntryPatches, entryListSchema, type PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import Group from '@deepseek-ai/cordis-plugin-group'
 import { dshHomePath, resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { createLaunchEnvironmentSnapshot, type LaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import type {} from '@deepseek-ai/cordis-plugin-hmr'
-import type {} from '@deepseek-ai/dsh-system-prompt'
+import { createPluginQuarantine, type PluginQuarantine } from './quarantine.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -51,6 +51,22 @@ export {
   type ProfilePatchReload,
   type ProfileTemplate,
 } from './profile.ts'
+
+export {
+  createPluginQuarantine,
+  type PluginQuarantine,
+  type QuarantinedPlugin,
+} from './quarantine.ts'
+
+/** Options controlling error handling and fault tolerance during boot. */
+export interface BootOptions {
+  /** Diagnostic prefix for load failure errors. */
+  binName?: string
+  /** Fault tolerance strategy: 'strict' (default) throws on any plugin error; 'safe-mode' isolates failures. */
+  faultTolerance?: 'strict' | 'safe-mode'
+  /** Entry IDs or names that must never be quarantined (failure is always fatal). */
+  essentialEntries?: readonly string[]
+}
 
 /**
  * Resolve the config to boot. Replay swaps a `cordis.yml` basename for
@@ -487,6 +503,84 @@ function groupedDump(
   return lines.join('\n') + '\n'
 }
 
+interface ExtractedFailure {
+  id: string
+  name: string
+  stage: 'import' | 'activation'
+  cause: unknown
+}
+
+function extractFailedEntries(error: unknown): ExtractedFailure[] {
+  const results: ExtractedFailure[] = []
+  const errors = error instanceof AggregateError ? error.errors : [error]
+
+  for (const err of errors) {
+    if (!(err instanceof Error)) continue
+    const matches = [...err.message.matchAll(/failed to (import|apply) loader entry ([^\s(:]+)(?:\s+\(([^)]+)\))?:/g)]
+    if (matches.length > 0) {
+      const last = matches[matches.length - 1]
+      if (last && last[1] && last[2]) {
+        const stage = last[1] === 'import' ? 'import' : 'activation'
+        const id = last[2]
+        const name = last[3] || id
+        let deepestCause: unknown = err.cause ?? err
+        while (deepestCause instanceof Error && deepestCause.cause !== undefined) {
+          deepestCause = deepestCause.cause
+        }
+        results.push({ id, name, stage, cause: deepestCause })
+      }
+    }
+  }
+  return results
+}
+
+class SafeModeEntryGroup extends EntryGroup {
+  constructor(
+    ctx: Context,
+    tree: EntryTree,
+    private quarantine: PluginQuarantine,
+    private essentials?: ReadonlySet<string>,
+  ) {
+    super(ctx, tree)
+  }
+
+  override async update(config: EntryOptions[]): Promise<void> {
+    const currentConfig = [...config]
+    while (true) {
+      try {
+        await super.update(currentConfig)
+        return
+      } catch (error) {
+        const failures = extractFailedEntries(error)
+        if (failures.length === 0) {
+          throw error
+        }
+        let disabledAny = false
+        for (const failure of failures) {
+          if (this.essentials?.has(failure.id) || this.essentials?.has(failure.name)) {
+            throw error
+          }
+          this.quarantine.record({
+            id: failure.id,
+            name: failure.name,
+            stage: failure.stage,
+            error: failure.cause,
+            quarantinedAt: Date.now(),
+          })
+          const target = currentConfig.find(e => (e.id && e.id === failure.id) || e.name === failure.name)
+          if (target && !target.disabled) {
+            target.disabled = true
+            disabledAny = true
+          }
+        }
+        if (!disabledAny) {
+          throw error
+        }
+      }
+    }
+  }
+}
+
 /**
  * Mount and remember the exact root Include entry used by app boot and user patch-layer HMR.
  * @param ctx - context carrying an initialized Loader service.
@@ -494,6 +588,8 @@ function groupedDump(
  * @param patches - initial app and user patches, applied in order.
  * @param bareModuleBaseUrl - optional installed-host base for bare package
  * names; relative names continue to resolve beside the configuration file.
+ * @param quarantine - optional plugin quarantine service for safe-mode boot.
+ * @param essentialEntries - optional set of entry IDs or names that must never be quarantined.
  * @returns the created root Include entry, or `undefined` when a surface
  * disposed the whole tree (taking the Loader service with it) while the
  * transactional create was still settling entry lifecycle.
@@ -503,18 +599,31 @@ export async function mountRootInclude(
   absoluteConfigPath: string,
   patches: readonly PatchOptions[] = [],
   bareModuleBaseUrl?: string,
+  quarantine?: PluginQuarantine,
+  essentialEntries?: ReadonlySet<string>,
 ): Promise<Entry | undefined> {
-  ctx.loader.builtins.include = bareModuleBaseUrl === undefined
-    ? Include
-    : class HostResolvedRootInclude extends Include {
-      override import(name: string, getOuterStack?: () => string[]): unknown {
-        const specifier = isAbsolute(name) ? pathToFileURL(name).href : name
-        if (name.startsWith('.') || name.startsWith('cordis:')) return super.import(specifier, getOuterStack)
-        const internal = this.ctx.loader.internal
-        /* v8 ignore next -- Node supplies the internal loader; this preserves the
-           original diagnostic for hypothetical embedders without it. */
-        if (internal === undefined) return super.import(specifier, getOuterStack)
-        return internal.import(specifier, bareModuleBaseUrl, {})
+  const resolvedBareBaseUrl = bareModuleBaseUrl ?? ''
+  class HostResolvedRootInclude extends Include {
+    override import(name: string, getOuterStack?: () => string[]): unknown {
+      const specifier = isAbsolute(name) ? pathToFileURL(name).href : name
+      if (name.startsWith('.') || name.startsWith('cordis:')) return super.import(specifier, getOuterStack)
+      const internal = this.ctx.loader.internal
+      /* v8 ignore next -- Node supplies the internal loader; this preserves the
+         original diagnostic for hypothetical embedders without it. */
+      if (internal === undefined) return super.import(specifier, getOuterStack)
+      return internal.import(specifier, resolvedBareBaseUrl, {})
+    }
+  }
+
+  const BaseInclude = bareModuleBaseUrl === undefined ? Include : HostResolvedRootInclude
+
+  const activeQuarantine = quarantine
+  ctx.loader.builtins.include = activeQuarantine === undefined
+    ? BaseInclude
+    : class SafeModeInclude extends BaseInclude {
+      constructor(includeCtx: Context, config: Include.Config) {
+        super(includeCtx, config)
+        this.root = new SafeModeEntryGroup(this.ctx, this, activeQuarantine, essentialEntries)
       }
     }
   // `cordis:group` alongside it: a group row is how a composition gives one
@@ -669,10 +778,40 @@ export function installFailLoud(
  * fiber-less state.
  * @param ctx - the settled context whose loader entries to audit.
  * @param binName - the diagnostic prefix on the thrown error.
+ * @param quarantine - optional quarantine service for safe-mode boot.
+ * @param essentialEntries - optional set of essential entry IDs or names.
  */
-export function assertEntriesLoaded(ctx: Context, binName: string): void {
+export function assertEntriesLoaded(
+  ctx: Context,
+  binName: string,
+  quarantine?: PluginQuarantine,
+  essentialEntries?: ReadonlySet<string>,
+): void {
   const failed = [...ctx.loader.entries()].filter(entry => entry.fiber === undefined && !entry.disabled)
   if (failed.length > 0) {
+    if (quarantine !== undefined) {
+      const fatal: string[] = []
+      for (const entry of failed) {
+        const id = entry.options.id ?? entry.options.name
+        const name = entry.options.name
+        if (essentialEntries?.has(id) || essentialEntries?.has(name)) {
+          fatal.push(name)
+        } else {
+          quarantine.record({
+            id,
+            name,
+            stage: 'import',
+            error: new Error(`plugin failed to import: ${name}`),
+            quarantinedAt: Date.now(),
+          })
+          entry.options.disabled = true
+        }
+      }
+      if (fatal.length === 0) {
+        return
+      }
+      throw new Error(`${binName}: essential plugin(s) failed to load: ${fatal.join(', ')}; Cordis startup failed because these essential plugin(s) could not be resolved`)
+    }
     const names = failed.map(entry => entry.options.name).join(', ')
     throw new Error(`${binName}: plugin(s) failed to load: ${names}; Cordis startup failed because these plugin(s) could not be resolved (see the error(s) logged above)`)
   }
@@ -700,12 +839,19 @@ function formatActivationError(error: unknown): string {
  * their private rejection reason.
  * @param ctx - the settled context whose Loader entries to audit.
  * @param binName - the diagnostic prefix on the thrown error.
+ * @param quarantine - optional quarantine service for safe-mode boot.
+ * @param essentialEntries - optional set of essential entry IDs or names.
  * @returns nothing when every enabled entry is active.
  * @throws after one process rejection checkpoint when an entry failed to
  * import, rejected during activation, or did not become active.
  */
-export async function assertEntriesActivated(ctx: Context, binName: string): Promise<void> {
-  assertEntriesLoaded(ctx, binName)
+export async function assertEntriesActivated(
+  ctx: Context,
+  binName: string,
+  quarantine?: PluginQuarantine,
+  essentialEntries?: ReadonlySet<string>,
+): Promise<void> {
+  assertEntriesLoaded(ctx, binName, quarantine, essentialEntries)
   const failures: string[] = []
   const rejectionReasons: unknown[] = []
   for (const entry of ctx.loader.entries()) {
@@ -713,11 +859,27 @@ export async function assertEntriesActivated(ctx: Context, binName: string): Pro
     if (fiber === undefined || entry.disabled) continue
     const state = fiber.state
     if (state === FIBER_ACTIVE) continue
+    const id = entry.options.id ?? entry.options.name
+    const name = entry.options.name
+    const isEssential = essentialEntries?.has(id) || essentialEntries?.has(name)
+
     if (state === FIBER_FAILED) {
       try {
         await fiber.await()
       } catch (error) {
         rejectionReasons.push(error)
+        if (quarantine !== undefined && !isEssential) {
+          await fiber.dispose()
+          entry.options.disabled = true
+          quarantine.record({
+            id,
+            name,
+            stage: 'activation',
+            error,
+            quarantinedAt: Date.now(),
+          })
+          continue
+        }
         failures.push(`${entry.options.name}: ${formatActivationError(error)}`)
       }
       continue
@@ -725,15 +887,28 @@ export async function assertEntriesActivated(ctx: Context, binName: string): Pro
     if (state === FIBER_PENDING) {
       const missing = Object.keys(fiber.inject).filter(service => fiber.ctx.get(service) === undefined)
       const subject = missing.length === 1 ? 'service' : 'services'
+      if (quarantine !== undefined && !isEssential) {
+        await fiber.dispose()
+        entry.options.disabled = true
+        quarantine.record({
+          id,
+          name,
+          stage: 'cascading',
+          missingServices: missing,
+          error: new Error(`pending (waiting for ${subject}: ${missing.join(', ') || 'unknown'})`),
+          quarantinedAt: Date.now(),
+        })
+        continue
+      }
       failures.push(`${entry.options.name}: pending (waiting for ${subject}: ${missing.join(', ') || 'unknown'})`)
     } else {
       failures.push(`${entry.options.name}: fiber state ${String(state)}`)
     }
   }
+  if (rejectionReasons.length > 0) {
+    await observeLoaderRejectionCheckpoint(rejectionReasons)
+  }
   if (failures.length > 0) {
-    if (rejectionReasons.length > 0) {
-      await observeLoaderRejectionCheckpoint(rejectionReasons)
-    }
     const noun = failures.length === 1 ? 'entry' : 'entries'
     throw new Error(`${binName}: ${String(failures.length)} ${noun} did not activate\n${failures.join('\n')}`)
   }
@@ -763,6 +938,7 @@ export async function assertEntriesActivated(ctx: Context, binName: string): Pro
  * @param bareModuleBaseUrl - optional installed-host base for bare package
  * names; use it when the host, rather than the configuration project, owns the
  * complete plugin set.
+ * @param options - optional boot configuration including fault tolerance and essential plugins.
  * @returns the root context once every entry has started, or as soon as a
  * surface disposed the tree while startup was still in flight.
  * @throws a labelled error after disposing the partial context — `host
@@ -775,8 +951,15 @@ export async function boot(
   patches?: PatchOptions[],
   prepare?: (ctx: Context) => Promise<void> | void,
   bareModuleBaseUrl?: string,
+  options?: BootOptions,
 ): Promise<Context> {
   const ctx = new Context()
+  const isSafeMode = options?.faultTolerance === 'safe-mode'
+  const quarantine = isSafeMode ? createPluginQuarantine() : undefined
+  const essentialSet = options?.essentialEntries ? new Set(options.essentialEntries) : undefined
+  if (quarantine !== undefined) {
+    ctx.provide('quarantine', quarantine)
+  }
   // Two failure labels: `prepare` runs before any config-tree entry mounts,
   // so its failure is host setup, not the plugin tree.
   let stage = 'host preparation failed'
@@ -786,7 +969,7 @@ export async function boot(
     await ctx.plugin(Loader)
     await prepare?.(ctx)
     stage = 'plugin tree failed to load'
-    await mountRootInclude(ctx, absoluteConfigPath, patches, bareModuleBaseUrl)
+    await mountRootInclude(ctx, absoluteConfigPath, patches, bareModuleBaseUrl, quarantine, essentialSet)
     // A surface can finish and dispose the whole tree while startup is still
     // in flight, before the last entry settles. The Loader service goes with
     // it, and the activation audit describes a live tree — reading `ctx.loader`
@@ -796,7 +979,7 @@ export async function boot(
     // re-check after every await.
     await ctx.get('loader')?.await()
     if (ctx.get('loader') === undefined) return ctx
-    await assertEntriesActivated(ctx, binName)
+    await assertEntriesActivated(ctx, binName, quarantine, essentialSet)
     return ctx
   } catch (cause) {
     // Root-fiber disposal contains cleanup failures per observer (Cordis

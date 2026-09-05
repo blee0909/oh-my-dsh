@@ -86,17 +86,71 @@ export function isContextWindowExceededError(detail: string): boolean {
 }
 
 /**
+ * Recognize unmistakable signs of terminal account-level balance/quota exhaustion.
+ */
+function matchesPermanentQuotaDepletion(detail: string): boolean {
+  return /\binsufficient[\s_-]+(?:quota|balance|credits?)\b/i.test(detail)
+    || /\b(?:account\s+)?balance[\s_-]+(?:is[\s_-]+)?(?:exhausted|depleted)\b/i.test(detail)
+    || /\bout[\s_-]+of[\s_-]+(?:credits?|budget)\b/i.test(detail)
+    || (/\bexceeded\s+(?:your\s+)?(?:current\s+)?quota\b/i.test(detail)
+      && !/\b(?:minute|requests?|tokens?|retryDelay|resets\s+in)\b/i.test(detail))
+}
+
+/**
+ * Check if the error indicates a transient rate or token-per-minute throttle
+ * rather than a permanent account-level quota failure.
+ */
+export function isTransientRateLimitError(detail: string): boolean {
+  // Dominant Priority: terminal account exhaustion is NEVER a transient rate limit,
+  // even if an upstream gateway / reverse proxy attached a generic Retry-After header.
+  if (matchesPermanentQuotaDepletion(detail)) return false
+
+  if (/\b(?:retryDelay|retry-after|resets\s+in)\b/i.test(detail)) return true
+  if (/\bRESOURCE_EXHAUSTED\b/i.test(detail) && /\b(?:minute|tokens?|requests?)\b/i.test(detail)) return true
+  if (/(?:\b429\b|\bToo Many Requests\b|\brate[\s_-]*limit)/i.test(detail)) return true
+  if (/\bPerMinute\b/i.test(detail)) return true
+  return false
+}
+
+/**
  * Recognize provider wording that identifies an exhausted account quota rather
  * than a transient request-rate limit.
  * @param detail - provider error code/type/message text joined into one string.
  * @returns true only for terminal quota, balance, credit, budget, or usage-limit wording.
  */
 export function isQuotaExceededError(detail: string): boolean {
+  // Terminal quota exhaustion is dominant
+  if (matchesPermanentQuotaDepletion(detail)) return true
+  // Transient rate limit throttles are not permanent quota errors
+  if (isTransientRateLimitError(detail)) return false
+
   return /\binsufficient[\s_-]+(?:quota|balance|credits?)\b/i.test(detail)
     || /\b(?:quota|usage[\s_-]+limit)[\s_-]+(?:exceeded|exhausted|reached)\b/i.test(detail)
     || /\bexceed(?:ed|s)?[\s_-]+(?:(?:your|the)[\s_-]+)?(?:current[\s_-]+)?quota\b/i.test(detail)
-    || /\b(?:balance|credits?)[\s_-]+(?:exhausted|depleted)\b/i.test(detail)
+    || /\b(?:balance|credits?)[\s_-]+(?:is[\s_-]+)?(?:exhausted|depleted)\b/i.test(detail)
     || /\bout[\s_-]+of[\s_-]+(?:credits?|budget)\b/i.test(detail)
+}
+
+/**
+ * Extract retry delay in milliseconds from provider error payload or headers when available.
+ */
+export function extractRetryDelayMs(detail: string): number | undefined {
+  // 1. Matches "retryDelay: 10s" or "retryDelay: 250ms" or "retryDelay: 1.5s"
+  const retryDelayMatch = detail.match(/\bretryDelay:\s*([0-9.]+)\s*(s|ms)\b/i)
+  if (retryDelayMatch?.[1] && retryDelayMatch[2]) {
+    const num = parseFloat(retryDelayMatch[1])
+    const unit = retryDelayMatch[2].toLowerCase()
+    return unit === 's' ? Math.round(num * 1000) : Math.round(num)
+  }
+
+  // 2. Matches "Retry-After: 15"
+  const retryAfterMatch = detail.match(/\bRetry-After:\s*([0-9.]+)\b/i)
+  if (retryAfterMatch?.[1]) {
+    const num = parseFloat(retryAfterMatch[1])
+    return Math.round(num * 1000)
+  }
+
+  return undefined
 }
 
 /**

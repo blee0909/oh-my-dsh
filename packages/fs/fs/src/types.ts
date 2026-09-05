@@ -186,6 +186,18 @@ export type FsErrorCode =
   | 'FS_AMBIGUOUS_EDIT'
   | 'FS_EDIT_NOT_FOUND'
   | 'FS_ABORTED'
+  | 'FS_SANDBOX_VIOLATION'
+
+export interface FsDeleteOptions {
+  /** If true, delete directories recursively. Default: false. */
+  recursive?: boolean
+  /** If true, ignore errors when target does not exist. Default: false. */
+  force?: boolean
+}
+
+export interface FsDeleteOutcome {
+  readonly success: boolean
+}
 
 /**
  * Typed filesystem error. Extends {@link HarnessError} so it carries a stable

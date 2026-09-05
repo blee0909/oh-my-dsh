@@ -39,6 +39,7 @@ import {
 import { ensureDurableDirectoryWin32, publishNewFileWin32 } from './win32.ts'
 
 export type { JsonlCompression } from './format.ts'
+export { SessionFileLocker, type SessionLockOptions, type LockPayload } from './file-lock.ts'
 
 /**
  * Internal handoff-reuse policy, not deployment configuration: a cold
@@ -240,7 +241,7 @@ class JsonlSessionPersistence extends SessionPersistence {
     }
     // A pending entry always belongs to an ACTIVE creator handle (close erases
     // it), so the claim below rejects that case as already owned.
-    this.tracker.claimWrite(id)
+    this.tracker.claimWrite(id, this.root)
     try {
       const stored = await this.requireStoredLog(id, options?.signal)
       return this.tracker.adopt(new JsonlSessionHandle(this, id, stored.meta, 'write', {

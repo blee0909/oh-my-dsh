@@ -771,6 +771,17 @@ describe('pressure measurement and retention', () => {
     const priced = ctx.tokenMeter.measure(session)
     expect(selectCompactableRange(session, priced, 1)).toBeNull()
   })
+
+  it('respects maxCutoffSeq to protect active turn boundary', () => {
+    const ctx = createContext()
+    const session = conversation(4)
+    const priced = ctx.tokenMeter.measure(session)
+    const surfaceNodes = session.surface.nodes
+    const midSeq = surfaceNodes[2]!
+    const range = selectCompactableRange(session, priced, 0, midSeq)
+    expect(range).not.toBeNull()
+    expect(range!.end).toBeLessThan(midSeq)
+  })
 })
 
 describe('optional model-free tool-result pruning', () => {

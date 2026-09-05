@@ -57,7 +57,7 @@ import type {
 } from './types.ts'
 
 export type * from './types.ts'
-export { ApiSessionNotFound } from './agent.ts'
+export { ApiSessionNotFound, type ApiSessionAction, isControlAction } from './agent.ts'
 export { SessionFileReferences } from './file-references.ts'
 export { SessionSkillCatalog } from './skill-catalog.ts'
 
@@ -185,10 +185,11 @@ export class SessionController extends TypertRemoteService {
   /**
    * Resolve or resume one ordinary Session for another Host API domain.
    * @param sessionId - Session identity whose Agent owns the operation.
+   * @param action - Action being resolved for Action-Level RBAC.
    * @returns the live Agent or the stable Session-domain failure.
    */
-  resolveAgent(sessionId: SessionId): Promise<ApiSessionAgentResult> {
-    return this.agents.resolveAgent(sessionId)
+  resolveAgent(sessionId: SessionId, action?: import('./agent.ts').ApiSessionAction): Promise<ApiSessionAgentResult> {
+    return this.agents.resolveAgent(sessionId, action)
   }
 
   /**

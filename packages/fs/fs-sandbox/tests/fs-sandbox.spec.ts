@@ -237,3 +237,55 @@ describe('FsError identity', () => {
     expect((error as FsError).code).toBe('FS_SANDBOX_DENIED')
   })
 })
+
+describe('sandboxed delete primitive (#5461)', () => {
+  it('read-only denies delete even for files inside workspace', async () => {
+    await boot('read-only')
+    const file = join(workspace, 'existing.txt')
+    await writeFile(file, 'do not delete')
+
+    await expect(fs.delete(await target(file)))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+
+    expect(existsSync(file)).toBe(true)
+  })
+
+  it('workspace-write permits deleting within workspace and within system tmpdir, but fences outside paths', async () => {
+    await boot('workspace-write')
+    // 1. Inside workspace: allowed
+    const wsFile = join(workspace, 'inside.txt')
+    await writeFile(wsFile, 'delete me')
+    const outcome1 = await fs.delete(await target(wsFile))
+    expect(outcome1.success).toBe(true)
+    expect(existsSync(wsFile)).toBe(false)
+
+    // 2. Inside system tmpdir: allowed by writableRoots
+    const tempFile = join(tmpdir(), `dsh-sbx-temp-${Date.now()}.txt`)
+    await writeFile(tempFile, 'temp data')
+    const outcome2 = await fs.delete(await target(tempFile))
+    expect(outcome2.success).toBe(true)
+    expect(existsSync(tempFile)).toBe(false)
+
+    // 3. Outside under HOME (sibling outside): denied
+    const outFile = join(outside, 'outside.txt')
+    await writeFile(outFile, 'forbidden')
+    await expect(fs.delete(await target(outFile)))
+      .rejects.toMatchObject({ code: 'FS_SANDBOX_DENIED' })
+    expect(existsSync(outFile)).toBe(true)
+  })
+
+  it('danger-full-access permits deleting outside files', async () => {
+    await boot('read-only')
+    const outFile = join(outside, 'escalated-delete.txt')
+    await writeFile(outFile, 'delete via escalation')
+
+    const outcome = await fs.delete(
+      await target(outFile),
+      undefined,
+      undefined,
+      { mode: 'danger-full-access', workspaceRoot: workspace },
+    )
+    expect(outcome.success).toBe(true)
+    expect(existsSync(outFile)).toBe(false)
+  })
+})

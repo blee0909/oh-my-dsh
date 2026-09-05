@@ -809,9 +809,16 @@ describe('subagent ownership fence', () => {
     const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
 
     const stopped = await remote.cancel(request({ sessionId: originChild.id }))
-    expect(stopped.ok).toBe(false)
-    if (!stopped.ok) expect(stopped.error.code).toBe('session/agent-busy')
-    expect(cancel).not.toHaveBeenCalled()
+    expect(stopped.ok).toBe(true)
+    expect(cancel).toHaveBeenCalled()
+
+    const prompted = await remote.prompt(promptRequest({
+      sessionId: originChild.id,
+      mode: 'queue',
+      content: [{ type: 'text', text: 'hi' }],
+    }))
+    expect(prompted.ok).toBe(false)
+    if (!prompted.ok) expect(prompted.error.code).toBe('session/agent-busy')
 
     const queued = await remote.updateQueue(request({
       sessionId: originChild.id,
@@ -827,8 +834,7 @@ describe('subagent ownership fence', () => {
       provider: 'p',
       model: 'm',
     }))
-    expect(selection.ok).toBe(false)
-    if (!selection.ok) expect(selection.error.code).toBe('session/agent-busy')
+    expect(selection.ok).toBe(true)
 
     const create = await remote.create(request({ sessionId: originChild.id, cwd: '/proj' }))
     expect(create.ok).toBe(false)
@@ -1039,10 +1045,10 @@ describe('sessions.prompt synchronous rejection', () => {
     })
     const remote = createSessionTestRemote(ctx, { defaultModelSelection: () => ({ provider: 'p', model: 'm' }), cwd: '/tmp' })
 
-    const selection = await remote.selectModel(request({ sessionId, provider: 'p', model: 'm' }))
-    expect(selection.ok).toBe(false)
-    if (!selection.ok) {
-      expect(selection.error).toMatchObject({
+    const prompted = await remote.prompt(promptRequest({ sessionId, mode: 'queue', content: [{ type: 'text', text: 'hi' }] }))
+    expect(prompted.ok).toBe(false)
+    if (!prompted.ok) {
+      expect(prompted.error).toMatchObject({
         code: 'session/agent-busy',
         details: { reason: 'use subagent delivery for this child session' },
       })

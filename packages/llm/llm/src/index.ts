@@ -33,6 +33,7 @@ import { HarnessError, INVALID_CREDENTIAL_CODE } from './error.ts'
 import { normalizeLlmFailure } from './adapter-failure.ts'
 import { normalizeApiKey } from './api-key.ts'
 import { contentHasImage, projectImagesForTextModel } from './content.ts'
+import { transformMessages } from './transform.ts'
 
 export * from './attribution.ts'
 export * from './brand.ts'
@@ -42,6 +43,7 @@ export * from './types.ts'
 export * from './content.ts'
 export * from './message.ts'
 export * from './retry-policy.ts'
+export * from './transform.ts'
 export { BlockAssembler } from './assembler.ts'
 export { callConfigEquals, isAgentLoopRequest, markAgentLoopRequest } from './call-config.ts'
 export type { LlmCallConfig, LlmCallConfigAdapterDefaults } from './call-config.ts'
@@ -657,7 +659,12 @@ export class LlmRuntime extends TypertRemoteService {
    * @returns the owning adapter's image pricing for the route, when declared.
    */
   imageRequestPricing(provider: string, model: string): LlmImageRequestPricing | undefined {
-    return this.adapters.get(provider)?.adapter.imageRequestPricing(provider, model)
+    const entry = this.adapters.get(provider)
+    if (entry === undefined) return undefined
+    const adapter = entry.adapter as Partial<LlmAdapter>
+    return typeof adapter?.imageRequestPricing === 'function'
+      ? adapter.imageRequestPricing(provider, model)
+      : undefined
   }
 
   /** Detach typed adapter-owned modality metadata. */
@@ -995,12 +1002,18 @@ export class LlmRuntime extends TypertRemoteService {
           : { ...options, ...resolvedConfig }
       const projectedOptions = modelInfo.inputModalities !== undefined
         && !modelInfo.inputModalities.includes('image')
-        && resolvedOptions.messages.some(message => contentHasImage(message.content))
+        && resolvedOptions.messages.some((message: Message) => contentHasImage(message.content))
         ? Object.isFrozen(resolvedOptions)
           ? deepFreeze({ ...resolvedOptions, messages: projectImagesForTextModel(resolvedOptions.messages) as Message[] })
           : { ...resolvedOptions, messages: projectImagesForTextModel(resolvedOptions.messages) as Message[] }
         : resolvedOptions
-      const stream = dispatch(this.forAdapter(projectedOptions, adapter))
+      const outboundMessages = transformMessages(projectedOptions.messages)
+      const wireOptions = outboundMessages === projectedOptions.messages
+        ? projectedOptions
+        : Object.isFrozen(projectedOptions)
+          ? deepFreeze({ ...projectedOptions, messages: outboundMessages })
+          : { ...projectedOptions, messages: outboundMessages }
+      const stream = dispatch(this.forAdapter(wireOptions, adapter))
       iterator = stream[Symbol.asyncIterator]()
     } catch (error: unknown) {
       yield adapterFailureChunk(error, options.signal)

@@ -234,6 +234,10 @@ function installControllers(
         const selection = defaults.defaultModelSelection()
         return [{ id: selection.provider, name: selection.provider }]
       },
+      resolveCallConfig: (config: { provider: string; model: string; reasoningEffort?: string }) =>
+        Promise.resolve(config),
+      resolveModelInfo: (_provider: string, model: string) =>
+        Promise.resolve({ id: model, name: model }),
     } as never)
   }
   installSessionReadTestServices(ctx)

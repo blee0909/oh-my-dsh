@@ -198,7 +198,6 @@ export class BasicCompactionEngine extends CompactionEngine {
         // A model-free prune can land before later summary work fails. That
         // durable reduction is sufficient retry proof; do not discard it just
         // because the optional second phase threw. Cancellation still wins.
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while recovery is awaited.
         if (!signal.aborted && agent.session.surface.replaceGeneration > generation) {
           ctx.logger.warn(
             `context-overflow compaction failed after durable surface progress: ${message}; `
@@ -208,14 +207,12 @@ export class BasicCompactionEngine extends CompactionEngine {
           return { kind: 'retry' }
         }
         ctx.logger.warn(
-          // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while recovery is awaited.
           `context-overflow compaction failed: ${message}; ${signal.aborted
             ? 'cancellation prevents retry'
             : 'preserving the original request error'}`,
         )
         return next()
       }
-      // oxlint-disable-next-line typescript/no-unnecessary-condition -- the signal can abort while compaction is awaited.
       if (signal.aborted
         || agent.session.surface.replaceGeneration <= generation) return next()
       if (result !== null) logResult(result, 'context overflow recovery')
@@ -286,7 +283,17 @@ export class BasicCompactionEngine extends CompactionEngine {
         prune.pruneSession(agent.session)
         measurement = meter.measure(agent.session)
       }
-      const range = selectCompactableRange(agent.session, measurement, 0)
+      // Protect active turn from being swallowed by finding the active turn's starting seq
+      const events = agent.session.snapshotEvents()
+      let activeTurnStartSeq: SessionSeq | undefined
+      for (let i = events.length - 1; i >= 0; i -= 1) {
+        const ev = events[i]
+        if (ev && ev.type === 'turn/start') {
+          activeTurnStartSeq = ev.seq
+          break
+        }
+      }
+      const range = selectCompactableRange(agent.session, measurement, 0, activeTurnStartSeq)
       if (range === null) return null
       return this.compactRegion(range.start, range.end, agent, signal)
     }

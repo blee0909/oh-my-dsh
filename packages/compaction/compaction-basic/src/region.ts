@@ -95,12 +95,14 @@ interface TransactionFailure {
  * @param session - session supplying authoritative current surface positions.
  * @param measurement - unified pressure and surface measurement from the conversation meter.
  * @param retainTokens - minimum recent tail budget retained verbatim.
+ * @param maxCutoffSeq - optional upper bound seq; cutoff will be strictly less than this seq to protect active turn.
  * @returns the inclusive positional seq range to compact, or `null`.
  */
 export function selectCompactableRange(
   session: Session,
   measurement: TokenMeasurement,
   retainTokens: number,
+  maxCutoffSeq?: SessionSeq,
 ): { start: SessionSeq; end: SessionSeq } | null {
   const pricedNodes = measurement.nodes
   if (pricedNodes.length === 0) return null
@@ -127,6 +129,21 @@ export function selectCompactableRange(
     keepFromIdx -= 1
   }
   if (keepFromIdx === 0) return null
+
+  // If a maxCutoffSeq boundary limit is given (e.g. active turn startSeq), ensure cutoff < maxCutoffSeq
+  if (maxCutoffSeq !== undefined) {
+    while (keepFromIdx > 0) {
+      const prevNode = surfaceNodes[keepFromIdx - 1]
+      if (prevNode === undefined || prevNode < maxCutoffSeq) break
+      keepFromIdx -= 1
+      while (keepFromIdx > 0) {
+        // oxlint-disable-next-line typescript/no-non-null-assertion
+        if (toolPairingBalancedBefore(session, surfaceNodes[keepFromIdx]!)) break
+        keepFromIdx -= 1
+      }
+    }
+    if (keepFromIdx === 0) return null
+  }
 
   // oxlint-disable-next-line typescript/no-non-null-assertion
   const first = surfaceNodes[0]!

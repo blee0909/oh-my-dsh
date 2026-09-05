@@ -26,6 +26,7 @@ import {
   apiSessionSubagentOwnershipError,
   hasApiSessionSubagentOwner,
   inspectApiSession,
+  type ApiSessionAction,
 } from './agent.ts'
 import type {
   SessionAttachmentRequest,
@@ -117,7 +118,7 @@ export class SessionCommandController {
    * @returns the normalized selection installed for the Session.
    */
   async selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue> {
-    const agent = await this.resolveAgent(request.sessionId)
+    const agent = await this.resolveAgent(request.sessionId, 'selectModel')
     return this.agents.serializeImageAdmission(agent, async () => {
       try {
         const resolved = await this.ctx.llm.resolveCallConfig({
@@ -296,7 +297,8 @@ export class SessionCommandController {
         { value: request.clientTimeZone },
       )
     }
-    const agent = await this.resolveAgent(request.sessionId)
+    const action: ApiSessionAction = request.mode === 'steer' ? 'steer' : 'prompt'
+    const agent = await this.resolveAgent(request.sessionId, action)
     const selection = this.agents.selectionFor(agent).current
     if (!routeServed(this.ctx, selection.provider)) {
       throw new RemoteError(
@@ -397,7 +399,9 @@ export class SessionCommandController {
     }
     const agent = this.ctx.agents.get(request.sessionId)
     if (agent !== undefined && hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
-      throw apiSessionSubagentOwnershipError(request.sessionId)
+      if (request.action.kind !== 'steer') {
+        throw apiSessionSubagentOwnershipError(request.sessionId)
+      }
     }
     if (agent === undefined) {
       throw new RemoteError('session/queue-item-not-found', 'queued item is no longer pending', { itemId: request.itemId })
@@ -427,7 +431,8 @@ export class SessionCommandController {
   }
 
   /**
-   * Cancel one live ordinary Agent while retaining pending inbox work.
+   * Cancel one live ordinary Agent and cascade cancellations to all its descendant subagents
+   * in bottom-up post-order while retaining pending inbox work for the root agent.
    * @param request - Session whose active Agent turn is cancelled.
    * @returns acknowledgement that cancellation was requested.
    */
@@ -440,15 +445,19 @@ export class SessionCommandController {
         { sessionId: request.sessionId },
       )
     }
-    if (hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
-      throw apiSessionSubagentOwnershipError(request.sessionId)
+
+    // Cascading cancellation of all descendant subagents in bottom-up post-order
+    const descendants = collectDescendantsPostOrder(this.ctx, agent)
+    for (const child of descendants) {
+      child.cancel({ kind: 'parent' }, { keepInbox: false })
     }
+
     agent.cancel({ kind: 'user' }, { keepInbox: true })
     return { accepted: true }
   }
 
-  private async resolveAgent(sessionId: SessionId): Promise<Agent> {
-    const found = await this.agents.resolveAgent(sessionId)
+  private async resolveAgent(sessionId: SessionId, action: ApiSessionAction = 'prompt'): Promise<Agent> {
+    const found = await this.agents.resolveAgent(sessionId, action)
     if ('error' in found) throw found.error
     return found.agent
   }
@@ -553,4 +562,30 @@ function referencedImage(
 
 function routeServed(ctx: Context, provider: string): boolean {
   return ctx.llm.listProviders().some(entry => entry.id === provider)
+}
+
+/**
+ * Recursively collect all descendant live agents in strict post-order (deepest leaves first) with cycle defense.
+ * @param ctx - Host context providing AgentRegistry.
+ * @param root - Root agent whose descendant subagents are collected.
+ * @returns Array of descendant agents in bottom-up post-order.
+ */
+export function collectDescendantsPostOrder(ctx: Context, root: Agent): Agent[] {
+  const all = ctx.agents.list()
+  const descendants: Agent[] = []
+  const visited = new Set<string>()
+
+  function traverse(current: Agent) {
+    const children = all.filter(candidate => ctx.agents.isOwnedBy(candidate.id, current))
+    for (const child of children) {
+      if (!visited.has(child.id)) {
+        visited.add(child.id)
+        traverse(child)
+        descendants.push(child)
+      }
+    }
+  }
+
+  traverse(root)
+  return descendants
 }

@@ -668,13 +668,16 @@ export class Session {
   append<T extends SessionEventType>(
     type: T,
     data: SessionEventMap[T],
-    ...opts: T extends SurfaceEventType ? [opts: SurfaceIntent] : []
+    ...opts: T extends SurfaceEventType
+      ? [opts: SurfaceIntent & { ignorable?: boolean }]
+      : [opts?: { ignorable?: boolean }]
   ): SessionEvent<T> {
-    const surfaceOpts: SurfaceIntent | undefined = opts[0]
+    const rawOpts = opts[0] as (SurfaceIntent & { ignorable?: boolean }) | undefined
     const surfaceMetadata = {
-      ...surfaceOpts?.sourceEventSeqs === undefined ? {} : { sourceEventSeqs: surfaceOpts.sourceEventSeqs },
-      ...surfaceOpts?.surfaceOp === undefined ? {} : { surfaceOp: surfaceOpts.surfaceOp },
+      ...rawOpts?.sourceEventSeqs === undefined ? {} : { sourceEventSeqs: rawOpts.sourceEventSeqs },
+      ...rawOpts?.surfaceOp === undefined ? {} : { surfaceOp: rawOpts.surfaceOp },
     }
+    const isIgnorable = rawOpts?.ignorable === true ? true : undefined
     const dataSnapshot = snapshotJsonValue(data)
     if (dataSnapshot === undefined) {
       throw new Error(`session event "${type}" carries non-JSON-serializable data`)
@@ -693,6 +696,7 @@ export class Session {
       seq: SessionSeq(this.log.length),
       time: Date.now(),
       data: dataSnapshot,
+      ...(isIgnorable ? { ignorable: true } : {}),
       ...(surfaceMetadataSnapshot as { surfaceOp?: unknown; sourceEventSeqs?: unknown }),
     } as unknown as SessionEvent<T>)
     this.surfaceManager.validateNext(event as SessionEvent)
@@ -1094,7 +1098,6 @@ export class SessionStore extends Service {
       } catch (error: unknown) {
         // Preserve the listener's exact rejection value; flush is a caller-owned
         // failure boundary, and Cordis listeners may throw arbitrary values.
-        // oxlint-disable-next-line typescript/prefer-promise-reject-errors
         return Promise.reject(error)
       }
     }))

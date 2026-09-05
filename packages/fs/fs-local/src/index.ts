@@ -9,8 +9,13 @@ import { constants as bufferConstants } from 'node:buffer'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import z from '@deepseek-ai/schemastery'
+import { rm } from 'node:fs/promises'
 import { FileSystem, FsError, FsVersion } from '@deepseek-ai/dsh-fs'
+import { writableRoots } from '@deepseek-ai/dsh-sandbox'
+import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
 import type {
+  FsDeleteOptions,
+  FsDeleteOutcome,
   FsDirEntry,
   FsEditOutcome,
   FsEditRequest,
@@ -254,6 +259,55 @@ export class LocalFileSystem extends FileSystem {
         // line-ending restoration is a storage detail the diff ignores.
         before: original.content,
         after: edited.content,
+      }
+    })
+  }
+
+  override async delete(
+    target: FsTarget,
+    options?: FsDeleteOptions,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<FsDeleteOutcome> {
+    if (signal?.aborted) throw new FsError('operation aborted', 'FS_ABORTED')
+    const fullPath = this.processPath(target)
+    if (sandboxPolicy?.mode === 'workspace-write') {
+      const normalizedPath = resolve(fullPath)
+      const roots = writableRoots(sandboxPolicy)
+      let allowed = false
+      for (const root of roots) {
+        const normalizedRoot = resolve(root)
+        const allowedPrefix = normalizedRoot.endsWith(sep) ? normalizedRoot : normalizedRoot + sep
+        if (normalizedPath === normalizedRoot || normalizedPath.startsWith(allowedPrefix)) {
+          allowed = true
+          break
+        }
+      }
+      if (!allowed) {
+        throw new FsError(
+          `Destination path "${target.displayPath}" is outside allowed writable roots under workspace-write mode`,
+          'FS_SANDBOX_DENIED',
+        )
+      }
+    }
+
+    return this.withLock(target.targetKey, async () => {
+      if (signal?.aborted) throw new FsError('operation aborted', 'FS_ABORTED')
+      try {
+        await rm(fullPath, { recursive: options?.recursive ?? false, force: options?.force ?? false })
+        return { success: true }
+      } catch (err: unknown) {
+        const nodeErr = err as NodeJS.ErrnoException
+        if (nodeErr?.code === 'ENOENT') {
+          if (options?.force) return { success: true }
+          throw new FsError(`cannot delete "${target.displayPath}": file not found`, 'FS_NOT_FOUND', { cause: err })
+        }
+        if (nodeErr?.code === 'EACCES' || nodeErr?.code === 'EPERM') {
+          throw new FsError(`cannot delete "${target.displayPath}": permission denied`, 'FS_PERMISSION_DENIED', { cause: err })
+        }
+        throw new FsError(`cannot delete "${target.displayPath}": ${nodeErr?.message ?? String(err)}`, 'FS_IO_ERROR', {
+          cause: err,
+        })
       }
     })
   }

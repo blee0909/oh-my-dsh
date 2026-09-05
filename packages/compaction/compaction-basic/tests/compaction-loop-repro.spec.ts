@@ -431,4 +431,58 @@ describe('context-overflow recovery across the real loop and compaction-basic', 
       await ctx.fiber.dispose()
     }
   })
+
+  it('preserves the active turn user prompt during context-overflow compaction (#5416)', async () => {
+    const ctx = new Context()
+    const adapter = new OverflowRecoveryAdapter('thrown')
+    await mountAgentLoopTestDependencies(ctx)
+    await mountInvariants(ctx)
+    await ctx.plugin(SessionProjectionRegistry)
+    await ctx.plugin(AgentLoop, { agents: [] })
+    await ctx.plugin(TokenMeter)
+    ctx.llm.registerAdapter(['mock'], adapter)
+    ctx.on('agent/request', async (_payload, next) => ({
+      ...await next(), provider: 'mock', model: 'mock',
+    }))
+    await ctx.plugin(BasicCompactionEngine, {
+      thresholdRatio: 1,
+      retainTokens: 100,
+      maxTokens: 64,
+      compactionRetries: 0,
+      maxOverflowRetries: 1,
+    })
+
+    try {
+      const { agent } = await ctx.agentLoop.createAgent(ctx, {
+        sessionId: SessionId('active-prompt-overflow-protection'),
+        seed: overflowHistorySeed(),
+        agentOptions: { provider: 'mock', model: 'mock' },
+      })
+
+      const targetPrompt = 'CRITICAL_USER_TASK_PROMPT_DO_NOT_SWALLOW'
+      agent.followup(createUserMessage({
+        content: [{ type: 'text', text: targetPrompt }],
+        source: { kind: 'user' },
+      }))
+      await agent.whenIdle()
+
+      // The initial request overflowed and was retried after compaction
+      expect(adapter.conversationRequests).toHaveLength(2)
+      expect(adapter.summaryRequests).toHaveLength(1)
+
+      // The retry request must contain the checkpoint AND must preserve the active user prompt!
+      const retryMessages = adapter.conversationRequests[1]!.messages
+      const retryContent = JSON.stringify(retryMessages)
+      expect(retryContent).toContain('RECOVERY CHECKPOINT')
+      expect(retryContent).toContain(targetPrompt)
+
+      // Verify the active user prompt is positioned after the checkpoint
+      const checkpointIndex = retryMessages.findIndex(m => JSON.stringify(m).includes('RECOVERY CHECKPOINT'))
+      const userPromptIndex = retryMessages.findIndex(m => JSON.stringify(m).includes(targetPrompt))
+      expect(checkpointIndex).toBeGreaterThanOrEqual(0)
+      expect(userPromptIndex).toBeGreaterThan(checkpointIndex)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
 })

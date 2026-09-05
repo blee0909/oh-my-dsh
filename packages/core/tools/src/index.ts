@@ -6,7 +6,7 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { AnonymousEntries, NamedEntries, ScopedLayers, scopeOf, scopeTarget } from '@deepseek-ai/dsh-scope'
+import { AnonymousEntries, NamedEntries, ScopedLayers, scopeOf, scopeTarget, scopeChainOf } from '@deepseek-ai/dsh-scope'
 import type { ScopeKey, ScopeLayer, Scoped } from '@deepseek-ai/dsh-scope'
 import type { ToolCallId, ContentBlock, ToolSchema } from '@deepseek-ai/dsh-llm'
 import { HarnessError } from '@deepseek-ai/dsh-llm'
@@ -26,6 +26,7 @@ import type { CodeSdkLanguage } from './ptc.ts'
 import { renderToolsSdk } from './ts-types.ts'
 import type { ToolSdkSchema } from './ts-types.ts'
 import { renderToolsSdkPy } from './py-types.ts'
+import { defineTool, type ToolTier } from './schema.ts'
 
 /**
  * Language → SDK-section renderer. The registry looks up the loaded
@@ -78,6 +79,8 @@ export {
   type InferValue,
   type InferArgs,
   type DefineToolOptions,
+  type ToolTier,
+  extractToolSummary,
 } from './schema.ts'
 
 export {
@@ -212,6 +215,10 @@ export interface ToolOutputDefinition {
 
 /** A registered tool: its schema plus the execution function. */
 export interface ToolDefinition extends ToolSchema {
+  /** Operational tier: 'core' (always active) or 'on-demand' (summarized until hydrated). */
+  readonly tier?: ToolTier
+  /** One-line summary for Tier-1 tool catalog projection. */
+  readonly summary?: string
   /** Mandatory canonical output declaration. */
   readonly output: ToolOutputDefinition
   /**
@@ -703,6 +710,47 @@ interface ToolView {
  */
 export type ToolGuard = (execution: Readonly<ToolExecution>) => string | undefined
 
+/** Reserved tool name for on-demand tool activation (#5448). */
+export const USE_TOOLS_NAME = 'use_tools'
+
+function createUseToolsTool(runtime: ToolRuntime): ToolDefinition {
+  return defineTool({
+    name: USE_TOOLS_NAME,
+    description: 'Activate on-demand tools into the active tool set for the current turn.',
+    tier: 'core',
+    summary: 'Activate on-demand tools for the current turn.',
+    parameters: {
+      tools: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Names of the tools to activate.',
+      },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: String(value) }],
+    },
+    execute: async (args, exec) => {
+      const toolNames = (args as { tools?: string[] }).tools ?? []
+      const activated: string[] = []
+      const notFound: string[] = []
+      for (const name of toolNames) {
+        const tool = runtime.get(name, exec.agent)
+        if (tool) {
+          runtime.hydrateTool(name, exec.agent, true)
+          activated.push(name)
+        } else {
+          notFound.push(name)
+        }
+      }
+      const parts: string[] = []
+      if (activated.length > 0) parts.push(`Activated tools: ${activated.join(', ')}.`)
+      if (notFound.length > 0) parts.push(`Tools not found: ${notFound.join(', ')}.`)
+      return parts.join(' ') || 'No tools specified.'
+    },
+  })
+}
+
 /** One scope's complete tool-registry contribution. */
 class ToolLayer implements ScopeLayer {
   readonly tools: NamedEntries<ToolDefinition>
@@ -805,6 +853,9 @@ export class ToolRuntime extends Service {
     scope => new ToolLayer(scope),
     () => { this.ctx.emit('tools/change') },
   )
+  private readonly turnHydrated = new Map<ScopeKey | undefined, Set<string>>()
+  private readonly inFlight = new Map<ScopeKey | undefined, Map<string, number>>()
+  private readonly draining = new Map<ScopeKey | undefined, Set<string>>()
   /** Presentation for scopes that declare none; {@link presentAs} shadows it per scope. */
   private readonly defaultMode: ToolPresentationMode
   private readonly maxParallelSubCalls: number
@@ -815,6 +866,12 @@ export class ToolRuntime extends Service {
    * transport is stateless beyond its closures over `this`.
    */
   private ptcTransport: ToolDefinition | undefined
+  private useToolsTransport: ToolDefinition | undefined
+
+  private requireUseToolsTransport(): ToolDefinition {
+    this.useToolsTransport ??= createUseToolsTool(this)
+    return this.useToolsTransport
+  }
 
   constructor(ctx: Context, config: Config = {}) {
     super(ctx, 'tools')
@@ -823,6 +880,16 @@ export class ToolRuntime extends Service {
     this.defaultMode = config.mode ?? 'native'
     this.maxParallelSubCalls = resolveMaxParallelSubCalls(config.maxParallelSubCalls)
     ctx.systemPrompt.tools(context => this.wireSchemas(context.scope))
+    ctx.systemPrompt.section({
+      name: 'tools:catalog',
+      order: 300,
+      text: context => this.summaryCatalog(context.scope),
+    })
+    ctx.on('agent/turn-stopping', (payload: unknown) => {
+      if (payload && typeof payload === 'object' && 'agent' in payload && payload.agent) {
+        this.deactivateTurnScopedTools(payload.agent as Agent)
+      }
+    })
     if (this.defaultMode !== 'native') {
       ctx.systemPrompt.section(this.collapseSection())
       ctx.systemPrompt.section(this.sdkSection())
@@ -961,28 +1028,150 @@ export class ToolRuntime extends Service {
         yield ctx.systemPrompt.section(this.sdkSection())
       }
     }.bind(this), 'tools.presentAs()')
-    // oxlint-disable-next-line typescript/no-misused-promises -- synchronous composite teardown
     return dispose
+  }
+
+  /**
+   * Check whether an on-demand tool is currently hydrated in the given scope.
+   * Core tools and tools without tier always count as hydrated.
+   */
+  isToolHydrated(name: string, scope?: ScopeKey): boolean {
+    const tool = this.get(name, scope)
+    if (!tool) return false
+    if (tool.tier === 'core' || tool.tier === undefined) return true
+    if (tool.name === USE_TOOLS_NAME || tool.name === RUN_CODE_NAME) return true
+    if (this.turnHydrated.get(scope)?.has(name)) return true
+    for (const parent of scopeChainOf(scope)) {
+      if (this.turnHydrated.get(parent)?.has(name)) return true
+    }
+    return false
+  }
+
+  /**
+   * Hydrate an on-demand tool into the nearest active layer for the scope.
+   */
+  hydrateTool(name: string, scope?: ScopeKey, _turnLeased = true): void {
+    const tool = this.get(name, scope)
+    if (!tool) return
+    let set = this.turnHydrated.get(scope)
+    if (!set) {
+      set = new Set()
+      this.turnHydrated.set(scope, set)
+    }
+    set.add(name)
+    this.ctx.emit('tools/change')
+  }
+
+  /**
+   * Dehydrate an on-demand tool from the nearest active layer for the scope.
+   */
+  dehydrateTool(name: string, scope?: ScopeKey): void {
+    const set = this.turnHydrated.get(scope)
+    if (set && set.has(name)) {
+      set.delete(name)
+      this.ctx.emit('tools/change')
+    }
+  }
+
+  /**
+   * Automatically de-activate turn-leased tools upon turn completion.
+   */
+  deactivateTurnScopedTools(agent?: Agent): void {
+    const set = this.turnHydrated.get(agent)
+    if (!set || set.size === 0) return
+    let changed = false
+    const inFlightMap = this.inFlight.get(agent)
+    let drainingSet = this.draining.get(agent)
+    for (const name of [...set]) {
+      const activeCount = inFlightMap?.get(name) ?? 0
+      if (activeCount > 0) {
+        if (!drainingSet) {
+          drainingSet = new Set()
+          this.draining.set(agent, drainingSet)
+        }
+        drainingSet.add(name)
+      } else {
+        set.delete(name)
+        changed = true
+      }
+    }
+    if (changed) {
+      this.ctx.emit('tools/change')
+    }
+  }
+
+  incrementInFlight(name: string, agent?: Agent): void {
+    let map = this.inFlight.get(agent)
+    if (!map) {
+      map = new Map()
+      this.inFlight.set(agent, map)
+    }
+    const current = map.get(name) ?? 0
+    map.set(name, current + 1)
+  }
+
+  decrementInFlight(name: string, agent?: Agent): void {
+    const map = this.inFlight.get(agent)
+    if (!map) return
+    const current = (map.get(name) ?? 1) - 1
+    if (current <= 0) {
+      map.delete(name)
+      const drainingSet = this.draining.get(agent)
+      if (drainingSet?.has(name)) {
+        drainingSet.delete(name)
+        this.turnHydrated.get(agent)?.delete(name)
+        this.ctx.emit('tools/change')
+      }
+    } else {
+      map.set(name, current)
+    }
+  }
+
+  /**
+   * Render a concise Tier-1 summary catalog for on-demand tools visible in the scope.
+   */
+  summaryCatalog(scope?: ScopeKey): string {
+    const view = this.view(scope)
+    const onDemandTools = [...view.visible.values()].filter(
+      d => d.tier === 'on-demand' && d.name !== RUN_CODE_NAME && d.name !== USE_TOOLS_NAME,
+    )
+    if (onDemandTools.length === 0) return ''
+    const lines = [
+      '## Available On-Demand Tools',
+      'The following tools can be activated via `use_tools` or called directly:',
+    ]
+    for (const tool of onDemandTools) {
+      const summary = tool.summary || tool.description.split('\n')[0] || ''
+      lines.push(`- \`${tool.name}\`: ${summary}`)
+    }
+    return lines.join('\n')
   }
 
   /**
    * Build one scope's wire schemas and names for prompt-order validation.
    * Restrictions do not make known tools invalid, but a mode collapse does.
    */
-  private wireSchemas(scope?: ScopeKey): ToolProviderResult {
+  wireSchemas(scope?: ScopeKey): ToolProviderResult {
     const view = this.view(scope)
     const mode = this.modeFor(scope)
+    const hasOnDemand = [...view.visible.values()].some(d => d.tier === 'on-demand')
+    const filterDefinition = (definition: ToolDefinition): boolean => {
+      if (!hasOnDemand) return true
+      if (definition.tier === 'core' || definition.name === USE_TOOLS_NAME || definition.name === RUN_CODE_NAME) {
+        return true
+      }
+      return this.isToolHydrated(definition.name, scope)
+    }
     if (mode === 'native') {
-      const schemas = [...view.visible.values()].map(definition => this.schemaOf(definition, false))
+      const schemas = [...view.visible.values()]
+        .filter(filterDefinition)
+        .map(definition => this.schemaOf(definition, false))
       return { schemas, knownNames: [...view.knownNames] }
     }
-    // Validate the runtime language BEFORE projecting schemas: schemaOf reads
-    // run_code's language-aware description/parameters getters, whose own
-    // flavor-table guard would otherwise surface first. This keeps the
-    // renderer-table rejection the canonical assembly-time error for a
-    // language with no SDK renderer.
     this.requireCodeRuntime(mode)
-    const schemas = [...view.visible.values()].map(definition => this.schemaOf(definition, false))
+    const schemas = [...view.visible.values()]
+      .filter(filterDefinition)
+      .map(definition => this.schemaOf(definition, false))
     if (mode === 'ptc') {
       return {
         schemas: schemas.filter(schema => schema.name === RUN_CODE_NAME),
@@ -1180,6 +1369,11 @@ export class ToolRuntime extends Service {
     if (this.modeFor(scope) !== 'native') {
       visible.set(RUN_CODE_NAME, this.requireCodeTransport())
     }
+    const hasOnDemand = [...visible.values()].some(d => d.tier === 'on-demand')
+    if (hasOnDemand && !visible.has(USE_TOOLS_NAME)) {
+      visible.set(USE_TOOLS_NAME, this.requireUseToolsTransport())
+      knownNames.add(USE_TOOLS_NAME)
+    }
     return { visible, knownNames, restrictableNames }
   }
 
@@ -1369,6 +1563,12 @@ export class ToolRuntime extends Service {
     // keeps the historical dispatch-stage `UNKNOWN_TOOL` path so policy
     // listeners still see every name that reaches the registry.
     const visible = this.get(name, agent)
+    if (visible !== undefined && visible.tier === 'on-demand') {
+      if (!this.isToolHydrated(name, agent)) {
+        this.hydrateTool(name, agent, true)
+      }
+      this.incrementInFlight(name, agent)
+    }
     const collapsed = visible !== undefined && this.collapses(name, agent, parent !== undefined)
     const concludingExecutions = this.concludingExecutions
     const base = {
@@ -1620,20 +1820,24 @@ export class ToolRuntime extends Service {
    * @internal
    */
   private finishScheduledExecution(exec: ToolRunContext, result: ToolExecutionResult): ToolExecutionResult {
-    let materializedResult: ToolExecutionResult
     try {
-      materializedResult = this.materializeFinalResult(result)
-    } catch (error: unknown) {
-      materializedResult = this.materializeFinalResult(toolErrorResult(error))
+      let materializedResult: ToolExecutionResult
+      try {
+        materializedResult = this.materializeFinalResult(result)
+      } catch (error: unknown) {
+        materializedResult = this.materializeFinalResult(toolErrorResult(error))
+      }
+      let finalResult: ToolExecutionResult
+      try {
+        finalResult = this.materializeFinalResult(this.applyFinalContent(exec, materializedResult))
+      } catch (error: unknown) {
+        finalResult = this.materializeFinalResult(toolErrorResult(error))
+      }
+      this.notifyResult(exec, finalResult)
+      return finalResult
+    } finally {
+      this.decrementInFlight(exec.name, exec.agent)
     }
-    let finalResult: ToolExecutionResult
-    try {
-      finalResult = this.materializeFinalResult(this.applyFinalContent(exec, materializedResult))
-    } catch (error: unknown) {
-      finalResult = this.materializeFinalResult(toolErrorResult(error))
-    }
-    this.notifyResult(exec, finalResult)
-    return finalResult
   }
 
   /** Apply the snapshotted tool-owned content transform without exposing other result fields. */

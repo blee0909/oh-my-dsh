@@ -57,6 +57,14 @@ export class ApiSessionPresetConflict extends Error {
   }
 }
 
+/** Actions supported by Session Controller resolving for Action-Level RBAC. */
+export type ApiSessionAction = 'prompt' | 'selectModel' | 'steer' | 'cancel'
+
+/** Test whether an API action belongs to the control-plane (governance/steering) rather than data-plane prompt. */
+export function isControlAction(action: ApiSessionAction): boolean {
+  return action === 'selectModel' || action === 'steer' || action === 'cancel'
+}
+
 /** Failures produced while resolving one ordinary Session identity to its live Agent. */
 export type ApiSessionAgentError = RemoteError<'session/not-found' | 'session/agent-busy' | 'gateway/internal'>
 
@@ -165,35 +173,39 @@ export class ApiSessionAgentController {
   /**
    * Resolve or resume one ordinary Session, deduplicating concurrent resumes.
    * @param sessionId - ordinary Session identity.
+   * @param action - Action being resolved for Action-Level RBAC.
    * @returns the live Agent or a stable Session-domain failure.
    */
-  async resolveAgent(sessionId: SessionId): Promise<ApiSessionAgentResult> {
-    return this.resolve(sessionId)
+  async resolveAgent(sessionId: SessionId, action: ApiSessionAction = 'prompt'): Promise<ApiSessionAgentResult> {
+    return this.resolve(sessionId, undefined, action)
   }
 
   /**
    * Resolve one ordinary Session from an already-retained exact observation.
    * @param observation - Host-owned observation whose preparation stays pinned through setup.
+   * @param action - Action being resolved for Action-Level RBAC.
    * @returns the live Agent or a stable Session-domain failure.
    */
-  async resolveObservedAgent(observation: SessionObservation): Promise<ApiSessionAgentResult> {
-    return this.resolve(observation.header.id, observation)
+  async resolveObservedAgent(observation: SessionObservation, action: ApiSessionAction = 'prompt'): Promise<ApiSessionAgentResult> {
+    return this.resolve(observation.header.id, observation, action)
   }
 
   private async resolve(
     sessionId: SessionId,
     observation?: SessionObservation,
+    action: ApiSessionAction = 'prompt',
   ): Promise<ApiSessionAgentResult> {
-    const live = this.liveAgent(sessionId)
+    const isControl = isControlAction(action)
+    const live = this.liveAgent(sessionId, isControl)
     if (live !== undefined) return live
     const attached = this.ctx.sessions.get(sessionId)
-    if (attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, undefined)) {
+    if (!isControl && attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, undefined)) {
       return { error: apiSessionSubagentOwnershipError(sessionId) }
     }
 
     let resume = this.resumes.get(sessionId)
     if (resume === undefined) {
-      resume = this.resume(sessionId, observation).finally(() => { this.resumes.delete(sessionId) })
+      resume = this.resume(sessionId, observation, isControl).finally(() => { this.resumes.delete(sessionId) })
       this.resumes.set(sessionId, resume)
     }
     try {
@@ -205,10 +217,10 @@ export class ApiSessionAgentController {
       if (error instanceof ApiSessionSubagentOwnership) {
         return { error: apiSessionSubagentOwnershipError(error.sessionId) }
       }
-      const raced = this.liveAgent(sessionId)
+      const raced = this.liveAgent(sessionId, isControl)
       if (raced !== undefined) return raced
       const racedSession = this.ctx.sessions.get(sessionId)
-      if (racedSession !== undefined && hasApiSessionSubagentOwner(this.ctx, racedSession, undefined)) {
+      if (!isControl && racedSession !== undefined && hasApiSessionSubagentOwner(this.ctx, racedSession, undefined)) {
         return { error: apiSessionSubagentOwnershipError(sessionId) }
       }
       return {
@@ -234,20 +246,21 @@ export class ApiSessionAgentController {
     cwd: string,
     checkPersistedIdentity: boolean,
     presetId?: string,
+    allowSubagentOwner = false,
   ): Promise<Agent> {
     let creation = this.creations.get(sessionId)
     if (creation === undefined) {
-      creation = this.createOrAdopt(sessionId, cwd, checkPersistedIdentity, presetId)
+      creation = this.createOrAdopt(sessionId, cwd, checkPersistedIdentity, presetId, allowSubagentOwner)
         .catch((error: unknown) => {
           const live = this.ctx.agents.get(sessionId)
           if (live !== undefined) {
-            if (hasApiSessionSubagentOwner(this.ctx, live.session, live)) {
+            if (!allowSubagentOwner && hasApiSessionSubagentOwner(this.ctx, live.session, live)) {
               throw new ApiSessionSubagentOwnership(sessionId)
             }
             return live
           }
           const attached = this.ctx.sessions.get(sessionId)
-          if (attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, undefined)) {
+          if (!allowSubagentOwner && attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, undefined)) {
             throw new ApiSessionSubagentOwnership(sessionId)
           }
           throw error
@@ -256,7 +269,7 @@ export class ApiSessionAgentController {
       this.creations.set(sessionId, creation)
     }
     const agent = await creation
-    if (hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
+    if (!allowSubagentOwner && hasApiSessionSubagentOwner(this.ctx, agent.session, agent)) {
       throw new ApiSessionSubagentOwnership(sessionId)
     }
     if (presetId !== undefined) {
@@ -387,19 +400,23 @@ export class ApiSessionAgentController {
     }
   }
 
-  private liveAgent(sessionId: SessionId): ApiSessionAgentResult | undefined {
+  private liveAgent(sessionId: SessionId, allowSubagent = false): ApiSessionAgentResult | undefined {
     const agent = this.ctx.agents.get(sessionId)
     if (agent === undefined) return undefined
-    return hasApiSessionSubagentOwner(this.ctx, agent.session, agent)
+    return (!allowSubagent && hasApiSessionSubagentOwner(this.ctx, agent.session, agent))
       ? { error: apiSessionSubagentOwnershipError(sessionId) }
       : { agent }
   }
 
-  private async resume(sessionId: SessionId, supplied?: SessionObservation): Promise<Agent> {
-    if (supplied !== undefined) return this.resumeObserved(sessionId, supplied)
+  private async resume(
+    sessionId: SessionId,
+    supplied?: SessionObservation,
+    allowSubagent = false,
+  ): Promise<Agent> {
+    if (supplied !== undefined) return this.resumeObserved(sessionId, supplied, allowSubagent)
     try {
       using observation = await this.ctx.sessionQuery.observeSession(sessionId)
-      return await this.resumeObserved(sessionId, observation)
+      return await this.resumeObserved(sessionId, observation, allowSubagent)
     } catch (error: unknown) {
       if (error instanceof SessionQueryError
         && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') {
@@ -412,17 +429,18 @@ export class ApiSessionAgentController {
   private async resumeObserved(
     sessionId: SessionId,
     observation: SessionObservation,
+    allowSubagent = false,
   ): Promise<Agent> {
     if (observation.header.id !== sessionId || observation.header.cwd === undefined) {
       throw new ApiSessionNotFound(`session "${sessionId}" not found`)
     }
-    if (hasApiSessionSubagentOwner(this.ctx, { header: observation.header }, undefined)) {
+    if (!allowSubagent && hasApiSessionSubagentOwner(this.ctx, { header: observation.header }, undefined)) {
       throw new ApiSessionSubagentOwnership(sessionId)
     }
     const composition = await this.composeAgent(this.presetForObservation(observation))
     const published = this.ctx.sessions.get(sessionId)
     const live = this.ctx.agents.get(sessionId)
-    if (published !== undefined && hasApiSessionSubagentOwner(this.ctx, published, live)) {
+    if (!allowSubagent && published !== undefined && hasApiSessionSubagentOwner(this.ctx, published, live)) {
       throw new ApiSessionSubagentOwnership(sessionId)
     }
     return (await this.ctx.agents.resume({
@@ -437,10 +455,11 @@ export class ApiSessionAgentController {
     cwd: string,
     checkPersistedIdentity: boolean,
     presetId: string | undefined,
+    allowSubagentOwner = false,
   ): Promise<Agent> {
     const attached = this.ctx.sessions.get(sessionId)
     const live = this.ctx.agents.get(sessionId)
-    if (attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, live)) {
+    if (!allowSubagentOwner && attached !== undefined && hasApiSessionSubagentOwner(this.ctx, attached, live)) {
       throw new ApiSessionSubagentOwnership(sessionId)
     }
     if (live !== undefined) return live
@@ -448,7 +467,7 @@ export class ApiSessionAgentController {
     if (checkPersistedIdentity) {
       try {
         using observation = await this.ctx.sessionQuery.observeSession(sessionId)
-        if (hasApiSessionSubagentOwner(this.ctx, { header: observation.header }, undefined)) {
+        if (!allowSubagentOwner && hasApiSessionSubagentOwner(this.ctx, { header: observation.header }, undefined)) {
           throw new ApiSessionSubagentOwnership(sessionId)
         }
         if (observation.header.cwd !== cwd) {

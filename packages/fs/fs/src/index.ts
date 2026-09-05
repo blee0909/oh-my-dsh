@@ -11,6 +11,8 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type {
+  FsDeleteOptions,
+  FsDeleteOutcome,
   FsDirEntry,
   FsEditOutcome,
   FsEditRequest,
@@ -22,6 +24,7 @@ import type {
   FsWriteIntent,
   FsWriteOutcome,
 } from './types.ts'
+import { FsError } from './types.ts'
 
 export {
   FsError,
@@ -29,6 +32,8 @@ export {
   FsVersion,
 } from './types.ts'
 export type {
+  FsDeleteOptions,
+  FsDeleteOutcome,
   FsEditOutcome,
   FsEditRequest,
   FsDirEntry,
@@ -260,6 +265,25 @@ export abstract class FileSystem extends Service {
     signal?: AbortSignal,
     sandboxPolicy?: SandboxExecutionPolicy,
   ): Promise<FsEditOutcome>
+
+  /**
+   * Delete a file or directory under sandbox policy governance (#5461).
+   * @param target - the resolved target to delete.
+   * @param options - recursion and error suppression flags.
+   * @param signal - aborts before deletion takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root this delete runs
+   *   under; sandboxing backends strictly fence deletion by it.
+   * @returns the outcome of the deletion.
+   */
+  async delete(
+    target: FsTarget,
+    _options?: FsDeleteOptions,
+    signal?: AbortSignal,
+    _sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<FsDeleteOutcome> {
+    if (signal?.aborted) throw new FsError('operation aborted', 'FS_ABORTED')
+    throw new FsError(`delete is not supported by filesystem backend "${this.name}" for "${target.displayPath}"`, 'FS_IO_ERROR')
+  }
 }
 
 export default FileSystem

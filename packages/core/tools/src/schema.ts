@@ -479,12 +479,33 @@ export function validateArgs(spec: ParameterSchemaSpec, args: unknown): string[]
   return validateJsonSchemaValue(parameterSchemaSpecToJsonSchema(spec), args, '')
 }
 
+/** Operational tier for two-tier indexing (#5448): 'core' (always in wire schemas) or 'on-demand' (Tier-1 summary, hydrated on need). */
+export type ToolTier = 'core' | 'on-demand'
+
+/**
+ * Extract a concise one-line summary for Tier-1 tool catalog projection.
+ * Falls back to extracting the first sentence of description.
+ */
+export function extractToolSummary(description: string, declaredSummary?: string): string {
+  if (declaredSummary !== undefined && declaredSummary.trim().length > 0) {
+    return declaredSummary.trim()
+  }
+  const firstLine = description.split('\n')[0] ?? ''
+  const periodIndex = firstLine.indexOf('.')
+  const candidate = periodIndex !== -1 ? firstLine.slice(0, periodIndex + 1) : firstLine
+  return candidate.trim().slice(0, 100) || description.slice(0, 100).trim()
+}
+
 /** Options for {@link defineTool}. */
 export interface DefineToolOptions<S extends ParameterSchemaSpec, O extends ValueSchemaSpec> {
   /** Tool name (must be unique). */
   readonly name: string
   /** Human-readable description sent to the model. */
   readonly description: string
+  /** Operational tier: 'core' (always active in wire schemas) or 'on-demand' (summarized until hydrated). Default: 'on-demand'. */
+  readonly tier?: ToolTier
+  /** One-line summary for Tier-1 tool catalog. Defaults to extracting the first sentence of description. */
+  readonly summary?: string
   /** Per-property parameter schema compiled to an implicit open object root. */
   readonly parameters: S
   /** Canonical output schema plus pure Native and presentation projections. */
@@ -546,19 +567,12 @@ export function defineTool<const S extends ParameterSchemaSpec, const O extends 
   options: DefineToolOptions<S, O>,
 ): ToolDefinition {
   // Object-literal methods do not use `this`; retaining references is safe.
-  // oxlint-disable-next-line typescript/unbound-method
   const userExecute = options.execute
-  // oxlint-disable-next-line typescript/unbound-method
   const userFinalizeContent = options.finalizeContent
-  // oxlint-disable-next-line typescript/unbound-method
   const userRender = options.output.render
-  // oxlint-disable-next-line typescript/unbound-method
   const userPresentationMeta = options.output.presentationMeta
-  // oxlint-disable-next-line typescript/unbound-method
   const userPresentCall = options.presentCall
-  // oxlint-disable-next-line typescript/unbound-method
   const userPresentResult = options.presentResult
-  // oxlint-disable-next-line typescript/unbound-method
   const userIsConcurrencySafe = options.isConcurrencySafe
   if (options.timeoutMs !== undefined && (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0)) {
     throw new Error(`defineTool(${options.name}): timeoutMs must be a positive finite number`)
@@ -569,6 +583,8 @@ export function defineTool<const S extends ParameterSchemaSpec, const O extends 
   const tool: ToolDefinition = {
     name: options.name,
     description: options.description,
+    ...(options.tier !== undefined ? { tier: options.tier } : {}),
+    summary: extractToolSummary(options.description, options.summary),
     parameters: parameters as unknown as Record<string, unknown>,
     output: {
       schema: outputSchema,

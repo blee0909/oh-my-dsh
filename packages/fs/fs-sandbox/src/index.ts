@@ -30,7 +30,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { LocalFileSystem } from '@deepseek-ai/dsh-fs-local'
 import type { Config as LocalConfig } from '@deepseek-ai/dsh-fs-local'
 import { FsError } from '@deepseek-ai/dsh-fs'
-import type { FsEditOutcome, FsEditRequest, FsTarget, FsVersion, FsWriteIntent, FsWriteOutcome } from '@deepseek-ai/dsh-fs'
+import type { FsDeleteOptions, FsDeleteOutcome, FsEditOutcome, FsEditRequest, FsTarget, FsVersion, FsWriteIntent, FsWriteOutcome } from '@deepseek-ai/dsh-fs'
 import { writableRoots } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
 import type {} from '@deepseek-ai/dsh-sandbox-policy'
@@ -106,6 +106,24 @@ export class SandboxedFileSystem extends LocalFileSystem {
     sandboxPolicy?: SandboxExecutionPolicy,
   ): Promise<FsEditOutcome> {
     return super.editText(await this.checkedTarget(target, sandboxPolicy), edit, expected, signal)
+  }
+
+  /**
+   * Fence the delete by the per-call policy, then delegate to the inherited
+   * delete primitive. See {@link checkedTarget}.
+   * @param target - the resolved target to delete.
+   * @param options - recursion and error suppression flags.
+   * @param signal - aborts before deletion takes effect.
+   * @param sandboxPolicy - the per-call mode and workspace root.
+   * @returns the delete outcome from the inherited backend.
+   */
+  override async delete(
+    target: FsTarget,
+    options?: FsDeleteOptions,
+    signal?: AbortSignal,
+    sandboxPolicy?: SandboxExecutionPolicy,
+  ): Promise<FsDeleteOutcome> {
+    return super.delete(await this.checkedTarget(target, sandboxPolicy), options, signal, sandboxPolicy)
   }
 
   /**
