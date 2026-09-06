@@ -886,8 +886,8 @@ export class ToolRuntime extends Service {
       text: context => this.summaryCatalog(context.scope),
     })
     ctx.on('agent/turn-stopping', (payload: unknown) => {
-      if (payload && typeof payload === 'object' && 'agent' in payload && payload.agent) {
-        this.deactivateTurnScopedTools(payload.agent as Agent)
+      if (typeof payload === 'object' && payload !== null && 'agent' in payload) {
+        this.deactivateTurnScopedTools((payload as { agent: Agent }).agent)
       }
     })
     if (this.defaultMode !== 'native') {

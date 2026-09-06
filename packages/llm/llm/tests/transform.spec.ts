@@ -148,14 +148,15 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
       expect(answeredIds).toContain('call_2')
       expect(answeredIds).toContain('call_3')
 
+      type ToolResultWithError = { isError?: boolean }
       // call_2 was real, call_1 and call_3 were synthetically marked as errors
-      const call2Result = allResults.find(r => r.type === 'tool-result' && r.toolCallId === 'call_2') as { isError?: boolean } | undefined
+      const call2Result = allResults.find(r => r.type === 'tool-result' && r.toolCallId === 'call_2') as ToolResultWithError | undefined
       expect(call2Result?.isError).toBeUndefined()
 
-      const call1Result = allResults.find(r => r.type === 'tool-result' && r.toolCallId === 'call_1') as { isError?: boolean } | undefined
+      const call1Result = allResults.find(r => r.type === 'tool-result' && r.toolCallId === 'call_1') as ToolResultWithError | undefined
       expect(call1Result?.isError).toBe(true)
 
-      const call3Result = allResults.find(r => r.type === 'tool-result' && r.toolCallId === 'call_3') as { isError?: boolean } | undefined
+      const call3Result = allResults.find(r => r.type === 'tool-result' && r.toolCallId === 'call_3') as ToolResultWithError | undefined
       expect(call3Result?.isError).toBe(true)
 
       // Strict alternation: Assistant -> User

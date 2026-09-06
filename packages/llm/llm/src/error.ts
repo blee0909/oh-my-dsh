@@ -92,8 +92,10 @@ function matchesPermanentQuotaDepletion(detail: string): boolean {
   return /\binsufficient[\s_-]+(?:quota|balance|credits?)\b/i.test(detail)
     || /\b(?:account\s+)?balance[\s_-]+(?:is[\s_-]+)?(?:exhausted|depleted)\b/i.test(detail)
     || /\bout[\s_-]+of[\s_-]+(?:credits?|budget)\b/i.test(detail)
-    || (/\bexceeded\s+(?:your\s+)?(?:current\s+)?quota\b/i.test(detail)
-      && !/\b(?:minute|requests?|tokens?|retryDelay|resets\s+in)\b/i.test(detail))
+    || (
+      /\bexceeded\s+(?:your\s+)?(?:current\s+)?quota\b/i.test(detail)
+      && !/\b(?:minute|requests?|tokens?|retryDelay|resets\s+in)\b/i.test(detail)
+    )
 }
 
 /**
@@ -137,16 +139,19 @@ export function isQuotaExceededError(detail: string): boolean {
 export function extractRetryDelayMs(detail: string): number | undefined {
   // 1. Matches "retryDelay: 10s" or "retryDelay: 250ms" or "retryDelay: 1.5s"
   const retryDelayMatch = detail.match(/\bretryDelay:\s*([0-9.]+)\s*(s|ms)\b/i)
-  if (retryDelayMatch?.[1] && retryDelayMatch[2]) {
-    const num = parseFloat(retryDelayMatch[1])
-    const unit = retryDelayMatch[2].toLowerCase()
+  const rawDelay = retryDelayMatch?.[1]
+  const rawUnit = retryDelayMatch?.[2]
+  if (rawDelay !== undefined && rawUnit !== undefined) {
+    const num = parseFloat(rawDelay)
+    const unit = rawUnit.toLowerCase()
     return unit === 's' ? Math.round(num * 1000) : Math.round(num)
   }
 
   // 2. Matches "Retry-After: 15"
   const retryAfterMatch = detail.match(/\bRetry-After:\s*([0-9.]+)\b/i)
-  if (retryAfterMatch?.[1]) {
-    const num = parseFloat(retryAfterMatch[1])
+  const rawAfter = retryAfterMatch?.[1]
+  if (rawAfter !== undefined) {
+    const num = parseFloat(rawAfter)
     return Math.round(num * 1000)
   }
 

@@ -602,7 +602,6 @@ export async function mountRootInclude(
   quarantine?: PluginQuarantine,
   essentialEntries?: ReadonlySet<string>,
 ): Promise<Entry | undefined> {
-  const resolvedBareBaseUrl = bareModuleBaseUrl ?? ''
   class HostResolvedRootInclude extends Include {
     override import(name: string, getOuterStack?: () => string[]): unknown {
       const specifier = isAbsolute(name) ? pathToFileURL(name).href : name
@@ -610,22 +609,24 @@ export async function mountRootInclude(
       const internal = this.ctx.loader.internal
       /* v8 ignore next -- Node supplies the internal loader; this preserves the
          original diagnostic for hypothetical embedders without it. */
-      if (internal === undefined) return super.import(specifier, getOuterStack)
-      return internal.import(specifier, resolvedBareBaseUrl, {})
+      if (internal === undefined || bareModuleBaseUrl === undefined) return super.import(specifier, getOuterStack)
+      return internal.import(specifier, bareModuleBaseUrl, {})
     }
   }
 
   const BaseInclude = bareModuleBaseUrl === undefined ? Include : HostResolvedRootInclude
 
-  const activeQuarantine = quarantine
-  ctx.loader.builtins.include = activeQuarantine === undefined
-    ? BaseInclude
-    : class SafeModeInclude extends BaseInclude {
+  if (quarantine === undefined) {
+    ctx.loader.builtins.include = BaseInclude
+  } else {
+    const activeQuarantine = quarantine
+    ctx.loader.builtins.include = class SafeModeInclude extends BaseInclude {
       constructor(includeCtx: Context, config: Include.Config) {
         super(includeCtx, config)
         this.root = new SafeModeEntryGroup(this.ctx, this, activeQuarantine, essentialEntries)
       }
     }
+  }
   // `cordis:group` alongside it: a group row is how a composition gives one
   // `isolate` realm to a provider and its consumers together, and an agent
   // preset living outside this workspace cannot resolve `@deepseek-ai/cordis-plugin-group`

@@ -297,7 +297,7 @@ export class LocalFileSystem extends FileSystem {
         await rm(fullPath, { recursive: options?.recursive ?? false, force: options?.force ?? false })
         return { success: true }
       } catch (err: unknown) {
-        const nodeErr = err as NodeJS.ErrnoException
+        const nodeErr = typeof err === 'object' && err !== null ? (err as { code?: string; message?: string }) : undefined
         if (nodeErr?.code === 'ENOENT') {
           if (options?.force) return { success: true }
           throw new FsError(`cannot delete "${target.displayPath}": file not found`, 'FS_NOT_FOUND', { cause: err })
@@ -305,9 +305,8 @@ export class LocalFileSystem extends FileSystem {
         if (nodeErr?.code === 'EACCES' || nodeErr?.code === 'EPERM') {
           throw new FsError(`cannot delete "${target.displayPath}": permission denied`, 'FS_PERMISSION_DENIED', { cause: err })
         }
-        throw new FsError(`cannot delete "${target.displayPath}": ${nodeErr?.message ?? String(err)}`, 'FS_IO_ERROR', {
-          cause: err,
-        })
+        const msg = nodeErr?.message ?? String(err)
+        throw new FsError(`cannot delete "${target.displayPath}": ${msg}`, 'FS_IO_ERROR', { cause: err })
       }
     })
   }

@@ -35,10 +35,11 @@ class MockFileSystem extends FileSystem {
     target: FsTarget,
     _options?: FsDeleteOptions,
     _signal?: AbortSignal,
-    sandboxPolicy?: { mode?: string },
+    sandboxPolicy?: unknown,
   ): Promise<FsDeleteOutcome> {
     const path = this.processPath(target)
-    if (sandboxPolicy?.mode === 'workspace-write' && path.startsWith('/etc/')) {
+    const policy = typeof sandboxPolicy === 'object' && sandboxPolicy !== null ? (sandboxPolicy as { mode?: string }) : undefined
+    if (policy?.mode === 'workspace-write' && path.startsWith('/etc/')) {
       throw new FsError('Destination path outside workspace sandbox', 'FS_SANDBOX_DENIED')
     }
     this.deletedTargets.push(path)

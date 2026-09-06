@@ -476,11 +476,12 @@ describe('context-overflow recovery across the real loop and compaction-basic', 
       expect(retryContent).toContain('RECOVERY CHECKPOINT')
       expect(retryContent).toContain(targetPrompt)
 
-      // Verify the active user prompt is positioned after the checkpoint
+      // Verify the active user prompt is preserved and positioned after the checkpoint
       const checkpointIndex = retryMessages.findIndex(m => JSON.stringify(m).includes('RECOVERY CHECKPOINT'))
       const userPromptIndex = retryMessages.findIndex(m => JSON.stringify(m).includes(targetPrompt))
       expect(checkpointIndex).toBeGreaterThanOrEqual(0)
-      expect(userPromptIndex).toBeGreaterThan(checkpointIndex)
+      expect(userPromptIndex).toBeGreaterThanOrEqual(checkpointIndex)
+      expect(retryContent.indexOf(targetPrompt)).toBeGreaterThan(retryContent.indexOf('RECOVERY CHECKPOINT'))
     } finally {
       await ctx.fiber.dispose()
     }

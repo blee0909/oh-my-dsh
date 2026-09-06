@@ -56,7 +56,9 @@ export function isProcessAlive(pid: number): boolean {
     return true
   } catch (err: unknown) {
     // EPERM means process exists but running under different credentials (it is ALIVE)
-    if ((err as NodeJS.ErrnoException)?.code === 'EPERM') return true
+    if (typeof err === 'object' && err !== null && 'code' in err && (err as { code: unknown }).code === 'EPERM') {
+      return true
+    }
     // ESRCH means No such process (it is DEAD)
     return false
   }
@@ -100,7 +102,7 @@ export class SessionFileLocker {
       ftruncateSync(this.fd, buffer.length)
       this.startHeartbeat()
     } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
+      if (typeof err === 'object' && err !== null && 'code' in err && (err as { code: unknown }).code === 'EEXIST') {
         // Check if existing lockfile is stale (dead owner process or zombie stall)
         if (this.isLockStale()) {
           try {

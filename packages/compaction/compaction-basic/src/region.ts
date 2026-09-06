@@ -137,8 +137,8 @@ export function selectCompactableRange(
       if (prevNode === undefined || prevNode < maxCutoffSeq) break
       keepFromIdx -= 1
       while (keepFromIdx > 0) {
-        // oxlint-disable-next-line typescript/no-non-null-assertion
-        if (toolPairingBalancedBefore(session, surfaceNodes[keepFromIdx]!)) break
+        const checkNode = surfaceNodes[keepFromIdx]
+        if (checkNode !== undefined && toolPairingBalancedBefore(session, checkNode)) break
         keepFromIdx -= 1
       }
     }
