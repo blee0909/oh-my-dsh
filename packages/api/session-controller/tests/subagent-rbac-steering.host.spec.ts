@@ -22,7 +22,7 @@ import type {
   LlmResolvedModelInfo,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
+import SessionStore, { SESSION_FORMAT_VERSION, SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import type { SessionHeader } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -203,7 +203,7 @@ describe('Subagent Action-Level RBAC and Steering', () => {
     const { ctx, remote } = await setupRbacHarness()
     const coldSessionId = SessionId('cold-subagent')
     const header: SessionHeader = {
-      version: 0,
+      version: SESSION_FORMAT_VERSION,
       id: coldSessionId,
       createdAt: 100,
       isSeeded: false,
