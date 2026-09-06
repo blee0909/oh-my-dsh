@@ -111,7 +111,7 @@ async function setupRbacHarness() {
       maxImageDimension: 1000,
       mediaTypes: ['image/png'],
     },
-    admitPromptContent: (_parts: unknown) => Promise.resolve([]),
+    admitPromptContent: (parts: unknown) => Promise.resolve(parts as never),
   } as never)
 
   const remote = createSessionTestRemote(ctx, {
