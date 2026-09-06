@@ -6,10 +6,11 @@ describe('Layer 3 Forward Compatibility: ignorable Marker in append (#5463)', ()
     const session = Session.create(SessionId('ignorable-test'))
 
     // Third-party plugins append out-of-tree events
+    type AppendParams = Parameters<typeof session.append>
     const customEvent = session.append(
-      'plugin/my-custom-event' as never,
-      { status: 'active', meta: 123 } as never,
-      { ignorable: true } as never,
+      'plugin/my-custom-event' as unknown as AppendParams[0],
+      { status: 'active', meta: 123 } as unknown as AppendParams[1],
+      { ignorable: true },
     )
 
     expect(customEvent.type).toBe('plugin/my-custom-event')
@@ -23,10 +24,11 @@ describe('Layer 3 Forward Compatibility: ignorable Marker in append (#5463)', ()
 
   it('reconstructs session from snapshots containing ignorable out-of-tree events without throwing', () => {
     const session = Session.create(SessionId('reconstruct-test'))
+    type AppendParams = Parameters<typeof session.append>
     session.append(
-      'plugin/third-party-widget' as never,
-      { widgetId: 'w1' } as never,
-      { ignorable: true } as never,
+      'plugin/third-party-widget' as unknown as AppendParams[0],
+      { widgetId: 'w1' } as unknown as AppendParams[1],
+      { ignorable: true },
     )
 
     const serialized = session.snapshotEvents()
