@@ -348,4 +348,107 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
       expect(transformed[1]).toBe(assistant)
     })
   })
+
+  describe('Empty Text Block Sanitization for Cross-Model Replay (#5773)', () => {
+    it('strips empty text blocks when assistant message has both tool-calls and empty text blocks', () => {
+      // Models like Google Antigravity stream an empty text block alongside a tool-call
+      const assistantWithEmptyTextAndTool = createAssistantMessage({
+        content: [
+          { type: 'text', text: '' }, // empty text block that crashes Claude
+          {
+            type: 'tool-call',
+            id: ToolCallId('call_antigravity_1'),
+            name: 'fetch_data',
+            arguments: '{}',
+          },
+          { type: 'text', text: '   ' }, // whitespace-only block
+        ],
+        source: { provider: 'google-antigravity', model: 'gemini-3.8-flash' },
+      })
+      const userToolResult = createUserMessage({
+        content: [{
+          type: 'tool-result',
+          toolCallId: ToolCallId('call_antigravity_1'),
+          content: [{ type: 'text', text: '{"data":"ok"}' }],
+        }],
+        source: { kind: 'user' },
+      })
+
+      const transformed = transformMessages([assistantWithEmptyTextAndTool, userToolResult])
+
+      expect(transformed).toHaveLength(2)
+      const assistant = transformed[0]!
+      expect(assistant.role).toBe('assistant')
+
+      // All empty or whitespace-only text blocks MUST be purged
+      const textBlocks = assistant.content.filter(b => b.type === 'text')
+      expect(textBlocks).toHaveLength(0)
+
+      // Tool call MUST be completely preserved
+      const toolCalls = assistant.content.filter(b => b.type === 'tool-call')
+      expect(toolCalls).toHaveLength(1)
+      expect(toolCalls[0]!.id).toBe(ToolCallId('call_antigravity_1'))
+    })
+
+    it('purges empty text blocks while preserving valid non-empty text, reasoning, and tool calls', () => {
+      const mixedAssistant = createAssistantMessage({
+        content: [
+          { type: 'text', text: '' },
+          { type: 'reasoning', text: 'Planning search...' },
+          { type: 'text', text: 'I will now search the files.' },
+          {
+            type: 'tool-call',
+            id: ToolCallId('call_search_2'),
+            name: 'search_files',
+            arguments: '{"q":"test"}',
+          },
+          { type: 'text', text: '\n\t  ' },
+        ],
+        source: { provider: 'google-antigravity', model: 'gemini-3.8-flash' },
+      })
+      const userToolResult = createUserMessage({
+        content: [{
+          type: 'tool-result',
+          toolCallId: ToolCallId('call_search_2'),
+          content: [{ type: 'text', text: 'results found' }],
+        }],
+        source: { kind: 'user' },
+      })
+
+      const transformed = transformMessages([mixedAssistant, userToolResult])
+
+      expect(transformed).toHaveLength(2)
+      const assistant = transformed[0]!
+      expect(assistant.content).toHaveLength(3) // reasoning, valid text, tool-call
+
+      const textBlocks = assistant.content.filter(b => b.type === 'text')
+      expect(textBlocks).toHaveLength(1)
+      expect(textBlocks[0]!.text).toBe('I will now search the files.')
+
+      const toolCalls = assistant.content.filter(b => b.type === 'tool-call')
+      expect(toolCalls).toHaveLength(1)
+      expect(toolCalls[0]!.id).toBe(ToolCallId('call_search_2'))
+
+      const reasoningBlocks = assistant.content.filter(b => b.type === 'reasoning')
+      expect(reasoningBlocks).toHaveLength(1)
+    })
+
+    it('synthesizes fallback placeholder when assistant message contains ONLY empty text blocks', () => {
+      const allEmptyAssistant = createAssistantMessage({
+        content: [
+          { type: 'text', text: '' },
+          { type: 'text', text: '   \n  ' },
+        ],
+        source: { provider: 'google-antigravity', model: 'gemini-3.8-flash' },
+      })
+
+      const transformed = transformMessages([allEmptyAssistant])
+
+      expect(transformed).toHaveLength(1)
+      const assistant = transformed[0]!
+      const textBlocks = assistant.content.filter(b => b.type === 'text')
+      expect(textBlocks).toHaveLength(1)
+      expect(textBlocks[0]!.text).toBe('(thinking completed without explicit text)')
+    })
+  })
 })

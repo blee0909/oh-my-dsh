@@ -238,25 +238,42 @@ export function transformMessages(
       // If previous assistant calls were still unclosed when new assistant begins, auto-heal them
       flushPendingToolCalls()
 
-      const toolCalls = msg.content.filter(b => b.type === 'tool-call')
-      const textBlocks = msg.content.filter(b => b.type === 'text' && b.text.trim().length > 0)
-      const reasoningBlocks = msg.content.filter(b => b.type === 'reasoning')
-
-      // Track newly emitted tool calls
-      for (const tc of toolCalls) {
+      // Track newly emitted tool calls first
+      for (const tc of msg.content) {
         if (tc.type === 'tool-call') {
           pendingToolCalls.set(tc.id, { name: tc.name })
           knownToolCalls.add(tc.id)
         }
       }
 
-      // If tool-calls exist or non-empty text exists, message is wire-safe
+      // Defense (#5773): Filter out empty text blocks that crash Claude API (HTTP 400 text cannot be empty)
+      const hasEmptyText = msg.content.some(b => b.type === 'text' && b.text.trim().length === 0)
+      const sanitizedContent = hasEmptyText
+        ? msg.content.filter(b => !(b.type === 'text' && b.text.trim().length === 0))
+        : msg.content
+
+      const toolCalls = sanitizedContent.filter(b => b.type === 'tool-call')
+      const textBlocks = sanitizedContent.filter(b => b.type === 'text')
+      const reasoningBlocks = sanitizedContent.filter(b => b.type === 'reasoning')
+
+      // Case A: Message has tool calls or valid non-empty text blocks
       if (toolCalls.length > 0 || textBlocks.length > 0) {
-        staged.push(msg)
+        if (hasEmptyText) {
+          modified = true
+          staged.push(
+            freezeMessage({
+              ...msg,
+              content: sanitizedContent,
+            }),
+          )
+        } else {
+          // Reference invariance preserved when no modification needed
+          staged.push(msg)
+        }
         continue
       }
 
-      // Defense (#5466): assistant has neither text nor tool calls
+      // Case B: Defense (#5466): assistant has neither text nor tool calls (either empty originally or after stripping empty text)
       modified = true
       const newContent: ContentBlock[] = []
 

@@ -273,4 +273,14 @@ describe('Two-tier Tool Schema Indexing (#5448)', () => {
     expect(ctx.tools.wireSchemas(parentAgent).schemas.map(s => s.name)).toContain('core_tool')
     expect(ctx.tools.wireSchemas(parentAgent).schemas.map(s => s.name)).not.toContain('secret_subagent_tool')
   })
+
+  it('guarantees global Symbol.for lookup compatibility across different module copies (#5758)', async () => {
+    const ctx = await mount()
+    const globalSchedulerSymbol = Symbol.for('@deepseek-ai/dsh-tools.scheduler')
+
+    // Simulate an out-of-bundle or independent package copy referencing ctx.tools using global Symbol.for
+    const scheduler = (ctx.tools as unknown as Record<symbol, unknown>)[globalSchedulerSymbol]
+    expect(scheduler).toBeDefined()
+    expect(typeof (scheduler as { prepare?: unknown }).prepare).toBe('function')
+  })
 })

@@ -467,11 +467,13 @@ describe('released event and payload inventory', () => {
       ['session/title', { title: 'Provider title', messageSeqs: [0], source: { kind: 'provider', provider: 'p' } }],
       ['subagent/descriptor', { mode: 'one-shot', version: 3, provider: 'p', label: 'child' }],
       ['subagent/descriptor', { mode: 'one-shot', version: 3, provider: 'p' }],
+      ['subagent/descriptor', { mode: 'one-shot', version: 2, provider: 'p', label: 'legacy-child' }],
       ['subagent/descriptor', {
         mode: 'continuable', version: 3, provider: 'p', label: 'child', agentProvider: 'p', agentModel: 'm',
         agentReasoningEffort: 'high', persona: 'persona', toolFilter: { deny: ['write'] },
       }],
       ['subagent/descriptor', { mode: 'continuable', version: 3, provider: 'p', label: 'child' }],
+      ['subagent/descriptor', { mode: 'continuable', version: 2, provider: 'p', label: 'legacy-child' }],
       ['approval/asked', { id: 'approval', toolName: 'read' }],
       ['team/member', {
         version: 1, teamId: 'team',
