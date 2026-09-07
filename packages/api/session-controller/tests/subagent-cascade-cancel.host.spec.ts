@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { Inbox } from '@deepseek-ai/dsh-agent'
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import AgentRegistry, { type Agent, type Inbox, type InboxTarget } from '@deepseek-ai/dsh-agent'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import LlmRuntime, { LlmAdapter } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, LlmModelInfo, LlmProviderInfo, LlmResolvedModelInfo, MessageId, StreamChunk, UserMessage } from '@deepseek-ai/dsh-llm'
 import { collectDescendantsPostOrder } from '../src/commands.ts'
 import { createSessionTestRemote } from './test-remote.ts'
 
@@ -35,7 +34,7 @@ class MockAdapter extends LlmAdapter {
 async function setupCascadeHarness() {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
-  await ctx.plugin(SystemPrompt, { persona: '' })
+  await ctx.plugin(SystemPrompt)
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(SessionProjectionRegistry)
@@ -71,6 +70,32 @@ async function setupCascadeHarness() {
   return { ctx, remote }
 }
 
+function createMockInbox(): Inbox {
+  const nextTurn: UserMessage[] = []
+  const nextStep: UserMessage[] = []
+  return {
+    get nextTurn() { return nextTurn },
+    get nextStep() { return nextStep },
+    clear: vi.fn(() => { nextTurn.length = 0; nextStep.length = 0 }),
+    append: vi.fn((target: InboxTarget, msg: UserMessage) => { (target === 'next-turn' ? nextTurn : nextStep).push(msg) }),
+    prepend: vi.fn((target: InboxTarget, msg: UserMessage) => { (target === 'next-turn' ? nextTurn : nextStep).unshift(msg) }),
+    replace: vi.fn((id: MessageId, newMsg: UserMessage) => {
+      const idx = nextTurn.findIndex(m => m.id === id)
+      if (idx >= 0) { nextTurn[idx] = newMsg; return true }
+      return false
+    }),
+    remove: vi.fn((id: MessageId) => {
+      const idx = nextTurn.findIndex(m => m.id === id)
+      if (idx >= 0) { nextTurn.splice(idx, 1); return true }
+      return false
+    }),
+    splice: vi.fn((target: InboxTarget, start: number, deleteCount: number, inserted: UserMessage[]) => {
+      const list = target === 'next-turn' ? nextTurn : nextStep
+      return list.splice(start, deleteCount, ...inserted)
+    }),
+  }
+}
+
 function createMockAgent(ctx: Context, idStr: string): Agent {
   const session = ctx.sessions.create(SessionId(idStr), { meta: { cwd: '/workspace' } })
   return {
@@ -78,7 +103,7 @@ function createMockAgent(ctx: Context, idStr: string): Agent {
     session,
     status: 'running',
     ctx,
-    inbox: new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} }),
+    inbox: createMockInbox(),
     steer: vi.fn(),
     followup: vi.fn(),
     cancel: vi.fn(),

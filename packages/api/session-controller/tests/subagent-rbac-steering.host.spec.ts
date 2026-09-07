@@ -11,9 +11,8 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import AgentRegistry, { Inbox } from '@deepseek-ai/dsh-agent'
-import type { Agent } from '@deepseek-ai/dsh-agent'
-import LlmRuntime, { LlmAdapter, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import AgentRegistry, { type Agent, type Inbox, type InboxTarget } from '@deepseek-ai/dsh-agent'
+import LlmRuntime, { LlmAdapter, ReasoningEffortId, type MessageId, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type {
   GenerateOptions,
   LlmModelInfo,
@@ -82,7 +81,7 @@ const REASONING: LlmModelReasoningInfo = {
 async function setupRbacHarness() {
   const ctx = new Context()
   await ctx.plugin(SessionStore)
-  await ctx.plugin(SystemPrompt, { persona: '' })
+  await ctx.plugin(SystemPrompt)
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(SessionProjectionRegistry)
@@ -121,6 +120,32 @@ async function setupRbacHarness() {
   return { ctx, remote }
 }
 
+function createMockInbox(): Inbox {
+  const nextTurn: UserMessage[] = []
+  const nextStep: UserMessage[] = []
+  return {
+    get nextTurn() { return nextTurn },
+    get nextStep() { return nextStep },
+    clear: vi.fn(() => { nextTurn.length = 0; nextStep.length = 0 }),
+    append: vi.fn((target: InboxTarget, msg: UserMessage) => { (target === 'next-turn' ? nextTurn : nextStep).push(msg) }),
+    prepend: vi.fn((target: InboxTarget, msg: UserMessage) => { (target === 'next-turn' ? nextTurn : nextStep).unshift(msg) }),
+    replace: vi.fn((id: MessageId, newMsg: UserMessage) => {
+      const idx = nextTurn.findIndex(m => m.id === id)
+      if (idx >= 0) { nextTurn[idx] = newMsg; return true }
+      return false
+    }),
+    remove: vi.fn((id: MessageId) => {
+      const idx = nextTurn.findIndex(m => m.id === id)
+      if (idx >= 0) { nextTurn.splice(idx, 1); return true }
+      return false
+    }),
+    splice: vi.fn((target: InboxTarget, start: number, deleteCount: number, inserted: UserMessage[]) => {
+      const list = target === 'next-turn' ? nextTurn : nextStep
+      return list.splice(start, deleteCount, ...inserted)
+    }),
+  }
+}
+
 describe('Subagent Action-Level RBAC and Steering', () => {
   it('rejects ordinary data-plane prompt on subagent session with session/agent-busy', async () => {
     const { ctx, remote } = await setupRbacHarness()
@@ -134,7 +159,7 @@ describe('Subagent Action-Level RBAC and Steering', () => {
       session: childSession,
       status: 'running',
       ctx,
-      inbox: new Inbox(childSession, { inserted: () => {}, discarded: () => {}, claimed: () => {} }),
+      inbox: createMockInbox(),
       steer: vi.fn(),
       followup: vi.fn(),
       cancel: vi.fn(),
@@ -166,7 +191,7 @@ describe('Subagent Action-Level RBAC and Steering', () => {
       session: childSession,
       status: 'running',
       ctx,
-      inbox: new Inbox(childSession, { inserted: () => {}, discarded: () => {}, claimed: () => {} }),
+      inbox: createMockInbox(),
       steer: vi.fn(),
       followup: vi.fn(),
       cancel: vi.fn(),
@@ -234,7 +259,7 @@ describe('Subagent Action-Level RBAC and Steering', () => {
       session: childSession,
       status: 'idle',
       ctx,
-      inbox: new Inbox(childSession, { inserted: () => {}, discarded: () => {}, claimed: () => {} }),
+      inbox: createMockInbox(),
     } as unknown as Agent
     vi.spyOn(ctx.agents, 'resume').mockResolvedValueOnce({ agent: resumedAgent } as never)
 
@@ -266,7 +291,7 @@ describe('Subagent Action-Level RBAC and Steering', () => {
       session: childSession,
       status: 'running',
       ctx,
-      inbox: new Inbox(childSession, { inserted: () => {}, discarded: () => {}, claimed: () => {} }),
+      inbox: createMockInbox(),
       steer: steerFn,
       followup: vi.fn(),
       cancel: vi.fn(),
@@ -292,7 +317,7 @@ describe('Subagent Action-Level RBAC and Steering', () => {
       meta: { cwd: '/workspace', origin: 'subagent', parentSession: parentSession.id },
     })
 
-    const inbox = new Inbox(childSession, { inserted: () => {}, discarded: () => {}, claimed: () => {} })
+    const inbox = createMockInbox()
     const queuedMessage = createUserMessage({ content: [{ type: 'text', text: 'queued in turn' }], source: { kind: 'user' } })
     inbox.append('next-turn', queuedMessage)
 
@@ -332,7 +357,7 @@ describe('Subagent Action-Level RBAC and Steering', () => {
       session: childSession,
       status: 'running',
       ctx,
-      inbox: new Inbox(childSession, { inserted: () => {}, discarded: () => {}, claimed: () => {} }),
+      inbox: createMockInbox(),
       steer: vi.fn(),
       followup: vi.fn(),
       cancel: cancelFn,
