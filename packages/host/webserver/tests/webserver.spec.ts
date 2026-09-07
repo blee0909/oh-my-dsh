@@ -378,4 +378,55 @@ describe('real Loader composition', () => {
       root = firstRoot
     }
   })
+
+  it('enforces authentication on non-public routes and allows public routes without credentials', { timeout: 60_000 }, async () => {
+    const loaded = await loadComposition()
+    const server = loaded.webServer
+
+    server.register({
+      kind: 'exact',
+      path: '/protected',
+      handler: (_req, res) => {
+        res.writeHead(200)
+        res.end('protected secret')
+      },
+    })
+
+    server.register({
+      kind: 'exact',
+      path: '/public',
+      isPublic: true,
+      handler: (_req, res) => {
+        res.writeHead(200)
+        res.end('public hello')
+      },
+    })
+
+    const unauthWithoutGuard = await request(server.port, '/protected')
+    expect(unauthWithoutGuard.status).toBe(200)
+    expect(unauthWithoutGuard.body).toBe('protected secret')
+
+    const clearAuth = server.setAuthenticator((req) => {
+      const auth = req.headers.authorization
+      return auth === 'Bearer secret-token'
+    })
+
+    const unauthWithGuard = await request(server.port, '/protected')
+    expect(unauthWithGuard.status).toBe(401)
+    expect(unauthWithGuard.body).toBe('unauthorized')
+
+    const authOk = await request(server.port, '/protected', {
+      headers: { authorization: 'Bearer secret-token' },
+    })
+    expect(authOk.status).toBe(200)
+    expect(authOk.body).toBe('protected secret')
+
+    const publicOk = await request(server.port, '/public')
+    expect(publicOk.status).toBe(200)
+    expect(publicOk.body).toBe('public hello')
+
+    clearAuth()
+    const restored = await request(server.port, '/protected')
+    expect(restored.status).toBe(200)
+  })
 })

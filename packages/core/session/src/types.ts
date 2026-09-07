@@ -125,6 +125,12 @@ export interface SessionHeader {
    * would replay history the model can no longer act on.
    */
   readonly agentPreset?: string
+  /**
+   * Workspace isolation mode for fork or subagent delegation: 'inherit' (shared
+   * read-only or default workspace), 'branch' (isolated sandbox branch), or
+   * 'share' (concurrent shared workspace).
+   */
+  readonly workspaceMode?: 'inherit' | 'branch' | 'share'
 }
 
 /**
@@ -153,6 +159,7 @@ export interface CreateSessionOptions {
     readonly origin?: 'subagent'
     readonly delegationDepth?: number
     readonly agentPreset?: string
+    readonly workspaceMode?: 'inherit' | 'branch' | 'share'
   }
 }
 

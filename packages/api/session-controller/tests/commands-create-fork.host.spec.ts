@@ -282,4 +282,31 @@ describe('Session fork failures', () => {
     expect(options.meta?.agentPreset).toBe('minimal')
     await ctx.fiber.dispose()
   })
+
+  it('carries workspaceMode into child metadata and preserves backward compatibility', async () => {
+    const ctx = await baseContext()
+    ctx.provide('workspaceRegistry', { list: () => [] } as never)
+    const source = completedSession(ctx, 'workspace-mode-source', '/workspace')
+    const create = vi.spyOn(ctx.agents, 'create').mockImplementation(
+      (options: CreateAgentOptions) => Promise.resolve(resolvedHandle(ctx, options.sessionId)),
+    )
+    const controller = new SessionCommandController(ctx, controllerAgents(), '/default')
+
+    // 1. 指定 branch 隔离模式
+    await controller.fork({ sessionId: source.id, workspaceMode: 'branch' })
+    let options = create.mock.calls.at(-1)?.[0]
+    expect(options?.meta?.workspaceMode).toBe('branch')
+
+    // 2. 指定 share 共享模式
+    await controller.fork({ sessionId: source.id, workspaceMode: 'share' })
+    options = create.mock.calls.at(-1)?.[0]
+    expect(options?.meta?.workspaceMode).toBe('share')
+
+    // 3. 缺省 workspaceMode 时保持向下兼容
+    await controller.fork({ sessionId: source.id })
+    options = create.mock.calls.at(-1)?.[0]
+    expect(options?.meta?.workspaceMode).toBeUndefined()
+
+    await ctx.fiber.dispose()
+  })
 })

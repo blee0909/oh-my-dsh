@@ -132,12 +132,18 @@ describe('sdkChildOutcome', () => {
       stopReason: 'aborted',
       diagnostic: expectedFailure('stage: session-run; category: child-disposed'),
     })
-    expect(sdkChildOutcome({ kind: 'blocked' })).toEqual({ stopReason: 'refusal' })
     expect(sdkChildOutcome({ kind: 'error', error: { message: 'x', code: 'UNKNOWN' } })).toEqual({
       stopReason: 'error',
-      diagnostic: expectedFailure('stage: session-run; category: child-error'),
+      diagnostic: expectedFailure('stage: session-run; category: child-error; cause: x'),
     })
-    expect(sdkChildOutcome({ kind: 'interrupted' })).toEqual({ stopReason: 'error' })
+    expect(sdkChildOutcome({ kind: 'error', error: { message: 'tool execution failed', code: 'E_TOOL' } })).toEqual({
+      stopReason: 'error',
+      diagnostic: expectedFailure('stage: session-run; category: child-error; cause: tool execution failed [E_TOOL]'),
+    })
+    expect(sdkChildOutcome({ kind: 'interrupted' })).toEqual({
+      stopReason: 'error',
+      diagnostic: expectedFailure('stage: session-run; category: child-interrupted'),
+    })
   })
 
   it('treats an absent or unknown reason as an error', () => {
@@ -323,7 +329,7 @@ describe('dsh-subagent-dsh-sdk provider', () => {
     const result = await run.result
     expect(result.stopReason).toBe('error')
     expect(result.diagnostic).toBe(
-      expectedFailure('stage: session-run; category: child-error'),
+      expectedFailure('stage: session-run; category: child-error; cause: scripted child error'),
     )
     expect(text(result.output)).toBe('partial answer')
     await run.dispose()

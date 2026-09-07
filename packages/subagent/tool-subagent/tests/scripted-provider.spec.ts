@@ -98,4 +98,16 @@ describe('scripted subagent provider fixture', () => {
     await fiber.dispose()
     expect(ctx.subagents.list()).toEqual([])
   })
+
+  it('preserves error diagnostic details with cause chain in result', async () => {
+    const errorWithCause = await mount({
+      stopReason: 'error',
+      diagnostic: 'Subagent failure (provider: DSH SDK; stage: session-run; category: child-error; cause: tool execution failed [E_TOOL])',
+    })
+    const errorRun = await errorWithCause.subagents.start('mock', baseRequest())
+    const result = await errorRun.result
+    expect(result.stopReason).toBe('error')
+    expect(result.diagnostic).toContain('cause: tool execution failed [E_TOOL]')
+    await errorRun.dispose()
+  })
 })

@@ -131,6 +131,12 @@ function validateSessionHeader(id: SessionId, input: unknown): SessionHeader {
   if (record.agentPreset !== undefined && typeof record.agentPreset !== 'string') {
     throw new Error('session header agentPreset must be a string')
   }
+  if (record.workspaceMode !== undefined
+    && record.workspaceMode !== 'inherit'
+    && record.workspaceMode !== 'branch'
+    && record.workspaceMode !== 'share') {
+    throw new Error('session header workspaceMode must be "inherit", "branch", or "share"')
+  }
   return deepFreeze(record as unknown as SessionHeader)
 }
 
@@ -983,6 +989,7 @@ export class SessionStore extends Service {
       ...meta?.origin === undefined ? {} : { origin: meta.origin },
       ...meta?.delegationDepth === undefined ? {} : { delegationDepth: meta.delegationDepth },
       ...meta?.agentPreset === undefined ? {} : { agentPreset: meta.agentPreset },
+      ...meta?.workspaceMode === undefined ? {} : { workspaceMode: meta.workspaceMode },
     }
     return Session.create(sessionId, seed, header, options?.inheritedEventCount)
   }

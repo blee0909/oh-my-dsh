@@ -291,10 +291,14 @@ export interface SessionRenameValue {
   readonly seq: number
 }
 
+/** Workspace isolation mode for child sessions. */
+export type WorkspaceMode = 'inherit' | 'branch' | 'share'
+
 /** Session fork request. */
 export interface SessionForkRequest {
   readonly sessionId: SessionId
   readonly atSeq?: number
+  readonly workspaceMode?: WorkspaceMode
 }
 
 /** Identity of a newly forked Session. */

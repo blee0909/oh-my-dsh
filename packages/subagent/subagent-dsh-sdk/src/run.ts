@@ -88,6 +88,7 @@ type SdkFailureCategory =
   | 'transport'
   | 'child-error'
   | 'child-disposed'
+  | 'child-interrupted'
   | 'child-unknown'
   | 'missing-terminal'
   | 'unknown'
@@ -95,6 +96,7 @@ type SdkFailureCategory =
 interface SdkFailureFacts {
   readonly stage: SdkFailureStage
   readonly category: SdkFailureCategory
+  readonly cause?: string | undefined
 }
 
 /** Fixed safe failure text derived only from provider-owned structured facts. */
@@ -104,6 +106,9 @@ function failureDiagnostic(facts: SdkFailureFacts): string {
     `stage: ${facts.stage}`,
     `category: ${facts.category}`,
   ]
+  if (facts.cause !== undefined && facts.cause.length > 0) {
+    fields.push(`cause: ${facts.cause}`)
+  }
   return `Subagent failure (${fields.join('; ')})`
 }
 
@@ -161,13 +166,26 @@ export function sdkChildOutcome(
         : { stopReason: 'aborted' }
     case 'blocked':
       return { stopReason: 'refusal' }
-    case 'error':
+    case 'error': {
+      const cause = reason.error?.message
+        ? (reason.error.code && reason.error.code !== 'UNKNOWN'
+          ? `${reason.error.message} [${reason.error.code}]`
+          : reason.error.message)
+        : undefined
       return {
         stopReason: 'error',
-        diagnostic: failureDiagnostic({ stage: 'session-run', category: 'child-error' }),
+        diagnostic: failureDiagnostic({
+          stage: 'session-run',
+          category: 'child-error',
+          ...(cause !== undefined ? { cause } : {}),
+        }),
       }
+    }
     case 'interrupted':
-      return { stopReason: 'error' }
+      return {
+        stopReason: 'error',
+        diagnostic: failureDiagnostic({ stage: 'session-run', category: 'child-interrupted' }),
+      }
     case undefined:
       return {
         stopReason: 'error',

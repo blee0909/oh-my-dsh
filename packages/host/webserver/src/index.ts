@@ -45,7 +45,17 @@ export interface WebRoute {
   path: string
   /** Owns the full response lifecycle (may hold the response open, e.g. SSE). */
   handler: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>
+  /**
+   * Whether this route is publicly accessible. When false or omitted,
+   * requests must pass the server's registered authenticator (if any).
+   */
+  isPublic?: boolean
 }
+
+/** Authenticator callback for non-public web routes. Returns boolean or HTTP error status code. */
+export type WebAuthenticator = (
+  req: IncomingMessage,
+) => boolean | number | undefined | Promise<boolean | number | undefined>
 
 /** One exact-path HTTP upgrade registration. */
 export interface WebUpgradeRoute {
@@ -139,6 +149,7 @@ export class WebServer extends Service {
   private server!: Server
   private listenedPort!: number
   private readonly gzip: NodeMiddleware | undefined
+  private authenticator: WebAuthenticator | undefined
 
   constructor(ctx: Context, private config: Config) {
     super(ctx, 'webServer')
@@ -216,6 +227,19 @@ export class WebServer extends Service {
     }
   }
 
+  /**
+   * Register a global authenticator for non-public routes (Secure by Default).
+   * @param authenticator - callback validating incoming requests.
+   * @returns the disposer clearing the authenticator.
+   */
+  setAuthenticator(authenticator: WebAuthenticator): () => void {
+    if (this.authenticator !== undefined) {
+      throw new Error('webserver: authenticator already registered')
+    }
+    this.authenticator = authenticator
+    return () => { this.authenticator = undefined }
+  }
+
   /** Listen; resolves once the socket is bound (rejection = FAILED fiber). */
   async [Service.init](): Promise<void> {
     const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -224,6 +248,15 @@ export class WebServer extends Service {
       const rawPath = new URL(req.url ?? '/', 'http://x').pathname
       const route = this.match(rawPath)
       if (route !== undefined) {
+        if (!route.isPublic && this.authenticator !== undefined) {
+          const auth = await this.authenticator(req)
+          if (auth === false || (typeof auth === 'number' && auth >= 400)) {
+            const status = typeof auth === 'number' ? auth : 401
+            res.writeHead(status)
+            res.end(status === 401 ? 'unauthorized' : 'forbidden')
+            return
+          }
+        }
         await route.handler(req, res)
         return
       }
