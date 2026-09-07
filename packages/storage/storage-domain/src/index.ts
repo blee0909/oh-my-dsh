@@ -24,7 +24,7 @@ export type {
   TableKeyOf, TableValueOf, GlobalValueOf,
 } from './spec.ts'
 export type { DomainChanged } from './events.ts'
-export type { Domain, DomainGlobal, DomainGlobalHandleOf, KvTable } from './domain.ts'
+export type { Domain, DomainGlobal, DomainGlobalHandleOf, KvTable, EvictableTable } from './domain.ts'
 
 declare module '@deepseek-ai/dsh-storage' {
   interface StorageForms {

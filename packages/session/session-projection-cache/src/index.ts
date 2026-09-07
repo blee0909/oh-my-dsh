@@ -31,7 +31,7 @@ import type {
   ProjectionSnapshot,
   SessionProjectionMap,
 } from '@deepseek-ai/dsh-session-projection'
-import type { KvTable } from '@deepseek-ai/dsh-storage-domain'
+import type { EvictableTable, KvTable } from '@deepseek-ai/dsh-storage-domain'
 import { projectionCacheDomainSpec } from './spec.ts'
 import type { CheckpointIdentity, CheckpointRecord } from './spec.ts'
 
@@ -47,7 +47,17 @@ const PREDECESSOR_TITLE_KEY = 'title' as Extract<keyof SessionProjectionMap, str
 export { checkpointIdentity, checkpointRecord, checkpointRow, projectionCacheDomainSpec } from './spec.ts'
 export type { CheckpointIdentity, CheckpointRecord } from './spec.ts'
 
+export interface ProjectionCacheMetrics {
+  hits: number
+  misses: number
+  evictions: number
+  coldReplays: number
+}
+
 declare module '@deepseek-ai/cordis' {
+  interface Events {
+    'session-projection-cache/evicted': (payload: { sessionId: SessionId; timestamp: number }) => void
+  }
   interface Context {
     sessionProjectionCache: SessionProjectionCache
   }
@@ -100,9 +110,20 @@ export class SessionProjectionCache extends Service {
   private table?: KvTable<SessionId, CheckpointRecord>
   private readonly dirty = new Map<Session, DirtyState>()
   private readonly lruOrder = new Set<SessionId>()
+  private readonly metrics: ProjectionCacheMetrics = {
+    hits: 0,
+    misses: 0,
+    evictions: 0,
+    coldReplays: 0,
+  }
 
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'sessionProjectionCache')
+  }
+
+  /** Retrieve telemetry metrics tracking cache performance and eviction lifecycle. */
+  getMetrics(): Readonly<ProjectionCacheMetrics> {
+    return { ...this.metrics }
   }
 
   /** Open the domain and install the write-behind listeners. */
@@ -130,11 +151,16 @@ export class SessionProjectionCache extends Service {
    */
   private recordFor(id: SessionId, expected: CurrentCheckpointIdentity): CheckpointRecord | undefined {
     const record = this.requireTable().get(id)
-    if (record === undefined) return undefined
+    if (record === undefined) {
+      this.metrics.misses++
+      return undefined
+    }
     if (identityMatches(record.identity, expected)) {
+      this.metrics.hits++
       this.touchLru(id)
       return record
     }
+    this.metrics.misses++
     return undefined
   }
 
@@ -291,6 +317,7 @@ export class SessionProjectionCache extends Service {
     inheritedEventCount: SessionLogOffset,
     events: readonly SessionEvent[],
   ): ProjectionSnapshot {
+    this.metrics.coldReplays++
     const identity = identityOf(meta, inheritedEventCount)
     const restored = this.ctx.sessionProjections.restore(
       this.recordFor(meta.id, identity)?.rows ?? {},
@@ -414,11 +441,17 @@ export class SessionProjectionCache extends Service {
 
   private evictSession(id: SessionId): void {
     this.lruOrder.delete(id)
-    const table = this.table
-    if (table) {
-      // Free the strong reference in KvTableImpl.records so V8 GC can collect the cold session
-      const internalTable = table as unknown as { records?: Map<string, unknown> }
-      internalTable.records?.delete(id)
+    this.metrics.evictions++
+    const table = this.table as unknown as Partial<EvictableTable>
+    table?.evictFromMemory?.(id)
+    this.emitEvicted(id)
+  }
+
+  private emitEvicted(sessionId: SessionId): void {
+    try {
+      this.ctx.emit('session-projection-cache/evicted', { sessionId, timestamp: Date.now() })
+    } catch (err) {
+      this.ctx.logger.debug(`[Telemetry] eviction notification suppressed: ${String(err)}`)
     }
   }
 

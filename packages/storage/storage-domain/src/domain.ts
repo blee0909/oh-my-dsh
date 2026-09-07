@@ -89,6 +89,21 @@ export interface KvTable<K extends string, V> {
   update(key: K, fn: (current: V) => V): Promise<V>
 }
 
+/**
+ * Capability interface for tables that support synchronous in-memory record eviction.
+ * Drops the strong reference in the in-memory record map without modifying or deleting
+ * the record in durable storage, and without emitting domain change events.
+ * Exclusively intended for derived, reproducible caches (e.g. projection caches)
+ * that can reconstruct state on demand.
+ */
+export interface EvictableTable {
+  /**
+   * Synchronously drop one record from the in-memory record map.
+   * @param key - Record key to evict from memory.
+   */
+  evictFromMemory(key: string): void
+}
+
 /** Global handle of a spec: typed when declared, `never` (inaccessible) when not. */
 export type DomainGlobalHandleOf<S extends DomainSpec> =
   S extends { readonly global: DomainGlobalSpec<infer G> } ? DomainGlobal<G> : never
@@ -277,12 +292,16 @@ export class DomainImpl {
 }
 
 /** Table handle bound to one in-memory record map and its domain's write chain. */
-class KvTableImpl<K extends string, V> implements KvTable<K, V> {
+class KvTableImpl<K extends string, V> implements KvTable<K, V>, EvictableTable {
   constructor(
     private readonly host: TableHost,
     private readonly tableName: string,
     private readonly records: Map<string, unknown>,
   ) {}
+
+  evictFromMemory(key: string): void {
+    this.records.delete(key)
+  }
 
   get(key: K): V | undefined {
     this.host.assertReadable()

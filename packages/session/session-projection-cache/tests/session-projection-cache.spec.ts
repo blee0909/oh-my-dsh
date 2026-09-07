@@ -144,4 +144,74 @@ describe('SessionProjectionCache LRU eviction & Memory Management (#5772)', () =
       expect(cache.cachedSnapshot(s3.header, SessionLogOffset(0))).toBeDefined()
     }, { timeout: 5_000 })
   })
+
+  it('tracks metrics accurately across hits, misses, evictions, and cold replays', async () => {
+    const { ctx, cache } = await harness(2)
+
+    const s1 = ctx.sessions.create()
+    s1.append('lru-test/mark', { marks: ['session-1'] })
+    await cache.write(s1)
+
+    const s2 = ctx.sessions.create()
+    s2.append('lru-test/mark', { marks: ['session-2'] })
+    await cache.write(s2)
+
+    // Two hits
+    expect(cache.cachedSnapshot(s1.header, SessionLogOffset(0))).toBeDefined()
+    expect(cache.cachedSnapshot(s2.header, SessionLogOffset(0))).toBeDefined()
+
+    // One miss with unwritten session
+    const sUnwritten = ctx.sessions.create()
+    expect(cache.cachedSnapshot(sUnwritten.header, SessionLogOffset(0))).toBeUndefined()
+
+    // Exceed maxCachedSessions = 2 -> 1 eviction
+    const s3 = ctx.sessions.create()
+    s3.append('lru-test/mark', { marks: ['session-3'] })
+    await cache.write(s3)
+
+    // s1 was evicted -> 1 miss
+    expect(cache.cachedSnapshot(s1.header, SessionLogOffset(0))).toBeUndefined()
+
+    // 1 cold replay
+    cache.coldSnapshot(s1.header, SessionLogOffset(0), s1.snapshotEvents())
+
+    const metrics = cache.getMetrics()
+    expect(metrics.hits).toBe(2)
+    // 3 misses: sUnwritten, cachedSnapshot on evicted s1, and coldSnapshot seeding attempt on evicted s1
+    expect(metrics.misses).toBe(3)
+    // 2 evictions: s1 evicted when s3 written, then s2 evicted when s1 written back during coldSnapshot
+    expect(metrics.evictions).toBe(2)
+    expect(metrics.coldReplays).toBe(1)
+  })
+
+  it('emits session-projection-cache/evicted event and contains listener exceptions', async () => {
+    const { ctx, cache } = await harness(2)
+    const evictedEvents: Array<{ sessionId: unknown; timestamp: number }> = []
+
+    ctx.on('session-projection-cache/evicted', (event) => {
+      evictedEvents.push(event)
+      // Hostile observer throwing synchronous error
+      throw new Error('malicious telemetry listener error')
+    })
+
+    const s1 = ctx.sessions.create()
+    s1.append('lru-test/mark', { marks: ['session-1'] })
+    await cache.write(s1)
+
+    const s2 = ctx.sessions.create()
+    s2.append('lru-test/mark', { marks: ['session-2'] })
+    await cache.write(s2)
+
+    // No eviction yet
+    expect(evictedEvents).toHaveLength(0)
+
+    // Writing s3 triggers eviction of s1; the throwing listener should be safely contained
+    const s3 = ctx.sessions.create()
+    s3.append('lru-test/mark', { marks: ['session-3'] })
+    await expect(cache.write(s3)).resolves.toBeUndefined()
+
+    expect(evictedEvents).toHaveLength(1)
+    expect(evictedEvents[0]?.sessionId).toBe(s1.id)
+    expect(typeof evictedEvents[0]?.timestamp).toBe('number')
+  })
 })

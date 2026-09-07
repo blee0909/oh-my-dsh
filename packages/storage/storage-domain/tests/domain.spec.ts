@@ -3,7 +3,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import Storage, { storageBackendServiceKey } from '@deepseek-ai/dsh-storage'
 import { apply, defineDomain, descriptorOf, DomainFacility, domainTable } from '../src/index.ts'
-import type { Config } from '../src/index.ts'
+import type { Config, EvictableTable } from '../src/index.ts'
 import type { DomainChanged } from '../src/events.ts'
 import { MemoryMediaPool, MemoryStorageBackend } from './helpers/memory-backend.ts'
 
@@ -406,5 +406,29 @@ describe('close and lifecycle', () => {
     expect(changes).toHaveLength(1)
     // The chain is unpoisoned: subsequent writes proceed normally.
     await expect(table.delete('a')).resolves.toBe(true)
+  })
+})
+
+describe('EvictableTable capability', () => {
+  it('evictFromMemory drops record from in-memory cache without durable delete or events', async () => {
+    const pool = new MemoryMediaPool()
+    const { facility, changes } = await harness({ pool })
+    const domain = await facility.open(spec)
+    const table = domain.table('items')
+    await table.put('a', { label: 'item-a', count: 10 })
+    expect(table.get('a')).toEqual({ label: 'item-a', count: 10 })
+    expect(changes).toHaveLength(1)
+
+    // Check capability and invoke evictFromMemory
+    const evictable = table as unknown as Partial<EvictableTable>
+    expect(typeof evictable.evictFromMemory).toBe('function')
+    evictable.evictFromMemory?.('a')
+
+    // In-memory record is dropped
+    expect(table.get('a')).toBeUndefined()
+    // No additional domain/changed event was dispatched
+    expect(changes).toHaveLength(1)
+    // Durable medium still retains the record
+    expect(pool.media.get('demo')!.tables.get('items')!.get('a')).toEqual({ label: 'item-a', count: 10 })
   })
 })
