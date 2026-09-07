@@ -304,12 +304,12 @@ export function transformMessages(
   flushPendingToolCalls()
 
   // 3. Turn Alternation Coalescer
-  // Check if adjacent same-role messages exist
+  // Check if adjacent same-role messages exist (skipping plugin boundaries to preserve prefix cache)
   let needsCoalesce = false
   for (let i = 1; i < staged.length; i++) {
     const curr = staged[i]
     const prev = staged[i - 1]
-    if (curr && prev && curr.role === prev.role) {
+    if (curr && prev && curr.role === prev.role && curr.source?.kind !== 'plugin' && prev.source?.kind !== 'plugin') {
       needsCoalesce = true
       break
     }
@@ -326,7 +326,7 @@ export function transformMessages(
 
   for (const msg of staged) {
     const prev = coalesced[coalesced.length - 1]
-    if (prev && prev.role === msg.role) {
+    if (prev && prev.role === msg.role && prev.source?.kind !== 'plugin' && msg.source?.kind !== 'plugin') {
       const mergedBlocks = coalesceBlocks(prev.content, msg.content)
       coalesced[coalesced.length - 1] = freezeMessage({
         ...prev,

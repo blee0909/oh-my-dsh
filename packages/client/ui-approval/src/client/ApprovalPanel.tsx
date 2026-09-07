@@ -27,6 +27,11 @@ function ApprovalFlow({ pending, detail, t }: {
     setAnswered(true)
     void pending.answer(outcome).catch(() => { setAnswered(false) })
   }
+  const effectiveDetail = detail ?? (pending.reason ? pending.reason : null)
+  const headline = detail !== null
+    ? (pending.reason ?? t('escalation', { toolName: pending.toolName }))
+    : t('escalation', { toolName: pending.toolName })
+
   return (
     <div className={css.root} data-approval-key={pending.key}>
       <div className={css.card}>
@@ -38,8 +43,8 @@ function ApprovalFlow({ pending, detail, t }: {
           role="group"
           aria-label={t('detail.aria')}
         >
-          <div className={css.headline}>{pending.reason ?? t('escalation', { toolName: pending.toolName })}</div>
-          {detail !== null && <div className={css.command}>{detail}</div>}
+          <div className={css.headline}>{headline}</div>
+          {effectiveDetail !== null && <div className={css.command}>{effectiveDetail}</div>}
         </div>
         <div className={css.actionRow}>
           <Button variant="outline" className={css.reject} disabled={answered} onClick={() => { answer('rejected') }}>

@@ -357,6 +357,19 @@ describe('ApprovalPanel', () => {
     await expect(pending.result).resolves.toBe('allowed-once')
   })
 
+  it('renders fallback reason card when callId is undefined and reason is provided', async () => {
+    const pending = new PendingApproval(id('s1'), {
+      toolName: 'bash',
+      reason: 'git push origin main',
+    })
+    const renderSlot = vi.fn(() => null)
+    render(<ApprovalPanel {...panelProps(pending, renderSlot)} />)
+
+    expect(screen.getByText('Tool bash asks')).toBeTruthy()
+    expect(screen.getByText('git push origin main')).toBeTruthy()
+    expect(renderSlot).not.toHaveBeenCalled()
+  })
+
   it('re-enables actions when answering fails', async () => {
     const pending = new PendingApproval(id('s1'), { toolName: 'bash' })
     vi.spyOn(pending, 'answer').mockRejectedValue(new Error('transport closed'))

@@ -390,8 +390,24 @@ async function summarizeCompaction(
   signal?: AbortSignal,
 ): Promise<SummarizedCompaction> {
   const summaryResult = await dependencies.summarize(prepared.input, agent, signal)
+  const activeSkillsSet = new Set<string>()
+  for (const msg of prepared.input.messages) {
+    const source = msg.source as unknown as { kind?: unknown; name?: unknown } | undefined
+    if (source?.kind === 'skill-invocation' && typeof source.name === 'string') {
+      activeSkillsSet.add(source.name)
+    }
+    for (const block of msg.content) {
+      if (block.type === 'text') {
+        const matches = block.text.matchAll(/<skill_content\s+name=["']([^"']+)["']/g)
+        for (const match of matches) {
+          if (match[1]) activeSkillsSet.add(match[1])
+        }
+      }
+    }
+  }
+  const activeSkills = Array.from(activeSkillsSet).sort()
   const checkpointMessage = createUserMessage({
-    content: frameSummary(summaryResult.summary),
+    content: frameSummary(summaryResult.summary, activeSkills),
     source: compactCheckpointSource(compactionId, sourceCommandId),
   })
   // The checkpoint is text-only, so its fixed-heuristic price IS its route

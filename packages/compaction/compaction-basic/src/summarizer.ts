@@ -61,6 +61,7 @@ const COMPACTION_INSTRUCTION = [
   '- Write concise English engineering prose. Preserve exact file paths, commands, error strings, identifiers, numeric values, function signatures, and syntax fragments.',
   '- Capture user feedback and explicit instructions faithfully, especially corrections.',
   '- Do NOT mention this summarization request or that the context was compacted.',
+  '- Do NOT summarize or restate global static system prompts, environment specifications, or baseline developer rules (e.g. AGENTS.md, tech stack descriptions). Focus exclusively on dynamic task progress, user instructions, decisions, and codebase modifications.',
   '- Output only the checkpoint text: do not call any tool or take any other action.',
   `- If the conversation already contains a ${SUMMARY_OPEN_TAG} block, it is a PRIOR checkpoint. Do not copy it forward verbatim: preserve still-true facts, drop stale ones, and merge newer information into a single consolidated summary under the same structure.`,
 ].join('\n')
@@ -181,16 +182,30 @@ export async function summarizeWithLlm(
   }
 }
 
+export const ACTIVE_SKILLS_OPEN_TAG = '<active-skills>'
+export const ACTIVE_SKILLS_CLOSE_TAG = '</active-skills>'
+
 /**
  * Wrap raw summary blocks in the durable checkpoint framing.
  * @param summary - safe text-only model output.
+ * @param activeSkills - optional list of active skill names identified in the compacted span.
  * @returns content for the synthesized replacement user message.
  */
-export function frameSummary(summary: readonly ContentBlock[]): ContentBlock[] {
+export function frameSummary(
+  summary: readonly ContentBlock[],
+  activeSkills?: readonly string[],
+): ContentBlock[] {
+  const skillsBlock = activeSkills && activeSkills.length > 0
+    ? [{
+      type: 'text' as const,
+      text: `${ACTIVE_SKILLS_OPEN_TAG}\n${activeSkills.map(s => `- ${s}`).join('\n')}\n${ACTIVE_SKILLS_CLOSE_TAG}`,
+    }]
+    : []
   return [
     { type: 'text', text: `${CHECKPOINT_PREAMBLE}\n\n${SUMMARY_OPEN_TAG}` },
     ...summary,
     { type: 'text', text: SUMMARY_CLOSE_TAG },
+    ...skillsBlock,
   ]
 }
 

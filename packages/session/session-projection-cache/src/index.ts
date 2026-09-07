@@ -65,11 +65,14 @@ export interface Config {
   writeEveryEvents: number
   /** Longest time (milliseconds) a dirty checkpoint may stay unwritten between mandatory points. */
   writeIntervalMs: number
+  /** Maximum number of sessions kept resident in the in-memory projection cache. */
+  maxCachedSessions?: number
 }
 
 export const Config: z<Config> = z.object({
   writeEveryEvents: z.natural().min(1).required(),
   writeIntervalMs: z.natural().min(1).required(),
+  maxCachedSessions: z.natural().min(1).default(100),
 })
 
 /** Per-session write-behind bookkeeping (live sessions only; dropped at retire). */
@@ -96,6 +99,7 @@ export class SessionProjectionCache extends Service {
 
   private table?: KvTable<SessionId, CheckpointRecord>
   private readonly dirty = new Map<Session, DirtyState>()
+  private readonly lruOrder = new Set<SessionId>()
 
   constructor(ctx: Context, public config: Config) {
     super(ctx, 'sessionProjectionCache')
@@ -106,6 +110,9 @@ export class SessionProjectionCache extends Service {
     const domain = await this.ctx.storageDomain.open(projectionCacheDomainSpec)
     this.ctx.effect(() => () => domain.close(), 'sessionProjectionCache.domainClose')
     this.table = domain.table('sessions')
+    for (const key of this.table.keys()) {
+      this.touchLru(key as SessionId)
+    }
     this.installWritePath()
   }
 
@@ -124,7 +131,11 @@ export class SessionProjectionCache extends Service {
   private recordFor(id: SessionId, expected: CurrentCheckpointIdentity): CheckpointRecord | undefined {
     const record = this.requireTable().get(id)
     if (record === undefined) return undefined
-    return identityMatches(record.identity, expected) ? record : undefined
+    if (identityMatches(record.identity, expected)) {
+      this.touchLru(id)
+      return record
+    }
+    return undefined
   }
 
   /**
@@ -176,6 +187,7 @@ export class SessionProjectionCache extends Service {
     const expected = identityOf(meta, inheritedEventCount)
     const record = this.requireTable().get(meta.id)
     if (record === undefined || !predecessorIdentityMatches(record.identity, expected)) return undefined
+    this.touchLru(meta.id)
     const title = this.viewRecord(record, [PREDECESSOR_TITLE_KEY])
     return title === undefined ? undefined : { ...title, asOfSeq: -1 }
   }
@@ -382,6 +394,32 @@ export class SessionProjectionCache extends Service {
       throw new TypeError('projection checkpoint is not losslessly JSON-serializable (a unit state violates the plain-JSON contract)')
     }
     await this.requireTable().put(id, { identity, rows: detached as CheckpointRecord['rows'] })
+    this.touchLru(id)
+  }
+
+  private touchLru(id: SessionId): void {
+    this.lruOrder.delete(id)
+    this.lruOrder.add(id)
+    this.pruneLru()
+  }
+
+  private pruneLru(): void {
+    const max = this.config.maxCachedSessions ?? 100
+    while (this.lruOrder.size > max) {
+      const oldest = this.lruOrder.keys().next().value
+      if (oldest === undefined) break
+      this.evictSession(oldest)
+    }
+  }
+
+  private evictSession(id: SessionId): void {
+    this.lruOrder.delete(id)
+    const table = this.table
+    if (table) {
+      // Free the strong reference in KvTableImpl.records so V8 GC can collect the cold session
+      const internalTable = table as unknown as { records?: Map<string, unknown> }
+      internalTable.records?.delete(id)
+    }
   }
 
   private requireTable(): KvTable<SessionId, CheckpointRecord> {

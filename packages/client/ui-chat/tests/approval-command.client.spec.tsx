@@ -2,7 +2,7 @@
 import { Context } from '@deepseek-ai/cordis'
 import type { ChatSnapshot, UseChat } from '@deepseek-ai/dsh-client-ui-chat/client'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { ApprovalCommand, commandOf } from '../src/client/chat/ApprovalCommand.tsx'
 import { apply as nodeApply } from '../src/index.ts'
@@ -25,6 +25,9 @@ describe('commandOf', () => {
     expect(commandOf({ callId: 'c1', argsRaw: '{}' })).toBeUndefined()
     expect(commandOf({ callId: 'c1', argsRaw: '{"command":42}' })).toBeUndefined()
     expect(commandOf({ callId: 'c1', argsRaw: '{"command":"pnpm test"}' })).toBe('pnpm test')
+    expect(commandOf({ callId: 'c1', argsRaw: '{"commandLine":"npm run build"}' })).toBe('npm run build')
+    expect(commandOf({ callId: 'c1', argsRaw: '{"cmd":"echo hi"}' })).toBe('echo hi')
+    expect(commandOf({ callId: 'c1', argsRaw: '{"script":"python run.py"}' })).toBe('python run.py')
   })
 })
 
@@ -37,6 +40,42 @@ describe('ApprovalCommand', () => {
     ] as never)} />)
 
     expect(screen.getByText('pnpm test')).toBeTruthy()
+  })
+
+  it('renders command from nested subCalls and interrupted states', () => {
+    // Nested subCalls
+    render(<ApprovalCommand {...props([
+      {
+        kind: 'tool-call',
+        data: {
+          root: {
+            callId: 'parent',
+            argsRaw: '{}',
+            subCalls: [
+              { callId: 'call-sub-1', argsRaw: '{"commandLine":"vitest run"}' },
+            ],
+          },
+        },
+      },
+    ] as never, 'call-sub-1')} />)
+    expect(screen.getByText('vitest run')).toBeTruthy()
+
+    // Interrupted tool state
+    cleanup()
+    render(<ApprovalCommand {...props([
+      {
+        kind: 'tool-call',
+        data: {
+          root: {
+            kind: 'tool-result',
+            callId: 'call-interrupted',
+            error: { name: 'Interrupted', code: 'interrupted' },
+            call: { name: 'bash', argsRaw: '{"cmd":"git status"}' },
+          },
+        },
+      },
+    ] as never, 'call-interrupted')} />)
+    expect(screen.getByText('git status')).toBeTruthy()
   })
 
   it('omits absent, uncorrelated, and settled Tool calls', () => {
