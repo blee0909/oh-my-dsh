@@ -57,7 +57,7 @@ describe('resolveLocalTarget', () => {
     expect(target.targetKey).toBe(join(await realpath(dir), 'missing.txt'))
   })
 
-  it('two paths to the same file via a symlink share one targetKey', async () => {
+  it.skipIf(process.platform === 'win32')('two paths to the same file via a symlink share one targetKey', async () => {
     const real = join(dir, 'real.txt')
     await writeFile(real, 'hi')
     const link = join(dir, 'link.txt')
@@ -73,7 +73,7 @@ describe('resolveLocalTarget', () => {
     expect(target.targetKey).toBe(join(await realpath(dir), 'no-such-dir', 'child.txt'))
   })
 
-  it('keeps the key stable across create when an ancestor is a symlink', async () => {
+  it.skipIf(process.platform === 'win32')('keeps the key stable across create when an ancestor is a symlink', async () => {
     // A symlinked workspace root with a not-yet-created subdirectory: the
     // pre-create key (via the symlink, missing parent) must equal the
     // post-create key (file exists, realpathed) so observed-state survives.
@@ -150,7 +150,7 @@ describe('probe', () => {
 })
 
 describe('probeNoFollow', () => {
-  it('reports symlinks without following them', async () => {
+  it.skipIf(process.platform === 'win32')('reports symlinks without following them', async () => {
     const real = join(dir, 'real.txt')
     const link = join(dir, 'link.txt')
     await writeFile(real, 'hi')
@@ -171,7 +171,7 @@ describe('probeNoFollow', () => {
 })
 
 describe('listDirectory', () => {
-  it('lists direct children in stable order without reading content', async () => {
+  it.skipIf(process.platform === 'win32')('lists direct children in stable order without reading content', async () => {
     const root = join(dir, 'skills')
     await mkdir(join(root, 'dir-skill'), { recursive: true })
     await writeFile(join(root, 'zeta.md'), 'zeta')
@@ -191,7 +191,7 @@ describe('listDirectory', () => {
     expect(entries.find(entry => entry.name === 'dir-skill')?.size).toBeUndefined()
   })
 
-  it('derives child target keys from the listed parent identity', async () => {
+  it.skipIf(process.platform === 'win32')('derives child target keys from the listed parent identity', async () => {
     const realOne = join(dir, 'real-one')
     const realTwo = join(dir, 'real-two')
     const link = join(dir, 'link')
@@ -240,13 +240,13 @@ describe('listDirectory', () => {
     }
   })
 
-  it('translates preflight metadata IO failures into FS_IO_ERROR', async () => {
+  it.skipIf(process.platform === 'win32')('translates preflight metadata IO failures into FS_IO_ERROR', async () => {
     const loop = join(dir, 'loop')
     await symlink(loop, loop)
     await expect(listDirectory(localTarget(loop))).rejects.toMatchObject({ code: 'FS_IO_ERROR' })
   })
 
-  it('translates child resolution failures into structured listing errors', async () => {
+  it.skipIf(process.platform === 'win32')('translates child resolution failures into structured listing errors', async () => {
     const root = join(dir, 'listed')
     await mkdir(root)
     const loop = join(root, 'loop')
@@ -254,7 +254,7 @@ describe('listDirectory', () => {
     await expect(listDirectory(localTarget(root))).rejects.toMatchObject({ code: 'FS_IO_ERROR' })
   })
 
-  it('translates child permission failures into FS_PERMISSION_DENIED', async () => {
+  it.skipIf(process.platform === 'win32')('translates child permission failures into FS_PERMISSION_DENIED', async () => {
     const root = join(dir, 'listed')
     const protectedRoot = join(dir, 'protected')
     const secret = join(protectedRoot, 'secret')

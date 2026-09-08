@@ -27,6 +27,7 @@ class MockFileSystem extends FileSystem {
   override async readText(): Promise<never> { throw new Error('not implemented') }
   override async streamText(): Promise<never> { throw new Error('not implemented') }
   override async readBytes(): Promise<never> { throw new Error('not implemented') }
+  override async readByteRange(): Promise<never> { throw new Error('not implemented') }
   override async listDir(): Promise<never> { throw new Error('not implemented') }
   override async writeText(): Promise<never> { throw new Error('not implemented') }
   override async editText(): Promise<never> { throw new Error('not implemented') }
