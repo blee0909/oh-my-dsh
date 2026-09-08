@@ -148,6 +148,7 @@ export async function* toStreamChunks(
   // pi-ai contentIndex ↔ our block index map 1:1 (both count blocks from 0
   // in stream order), but we track ids per index for tool calls.
   const toolIds = new Map<number, { id: string; name: string }>()
+  const seenToolCallIds = new Map<string, number>()
 
   for await (const event of events) {
     switch (event.type) {
@@ -174,8 +175,15 @@ export async function* toStreamChunks(
       case 'toolcall_start': {
         // The id/name live on the partial's content at this index.
         const partial = event.partial.content[event.contentIndex]
-        const id = partial?.type === 'toolCall' ? partial.id : ''
+        let id = partial?.type === 'toolCall' ? partial.id : ''
         const name = partial?.type === 'toolCall' ? partial.name : ''
+        if (id.length > 0) {
+          const count = (seenToolCallIds.get(id) ?? 0) + 1
+          seenToolCallIds.set(id, count)
+          if (count > 1) {
+            id = `${id}#${String(count)}`
+          }
+        }
         toolIds.set(event.contentIndex, { id, name })
         yield { type: 'block-start', index: event.contentIndex, blockType: 'tool-call' }
         break
@@ -191,13 +199,22 @@ export async function* toStreamChunks(
         }
         break
       }
-      case 'toolcall_end':
+      case 'toolcall_end': {
+        const known = toolIds.get(event.contentIndex)
+        let resolvedId = known?.id ?? event.toolCall.id
+        if (known === undefined && resolvedId.length > 0) {
+          const count = (seenToolCallIds.get(resolvedId) ?? 0) + 1
+          seenToolCallIds.set(resolvedId, count)
+          if (count > 1) {
+            resolvedId = `${resolvedId}#${String(count)}`
+          }
+        }
         yield {
           type: 'block-end',
           index: event.contentIndex,
           block: {
             type: 'tool-call',
-            id: brandString<ToolCallId>(event.toolCall.id),
+            id: brandString<ToolCallId>(resolvedId),
             name: event.toolCall.name,
             // pi-ai hands back the PARSED arguments; the harness vocabulary
             // keeps the raw string.
@@ -205,6 +222,7 @@ export async function* toStreamChunks(
           },
         }
         break
+      }
       case 'done':
         yield { type: 'usage', usage: mapUsage(event.message.usage) }
         yield {

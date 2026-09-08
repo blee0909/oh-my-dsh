@@ -800,6 +800,43 @@ describe('toStreamChunks', () => {
     ])
   })
 
+  it('deduplicates repeated tool call IDs within the same assistant stream (#5909)', async () => {
+    const multiCallAssistant = assistant({
+      content: [
+        { type: 'toolCall', id: 'call-dup', name: 'search', arguments: { q: '1' } },
+        { type: 'toolCall', id: 'call-dup', name: 'search', arguments: { q: '2' } },
+      ],
+      stopReason: 'toolUse',
+    })
+    const chunks = await collect(toStreamChunks(feed(
+      { type: 'toolcall_start', contentIndex: 0, partial: multiCallAssistant },
+      { type: 'toolcall_delta', contentIndex: 0, delta: '{"q":"1"}', partial: multiCallAssistant },
+      {
+        type: 'toolcall_end',
+        contentIndex: 0,
+        toolCall: { type: 'toolCall', id: 'call-dup', name: 'search', arguments: { q: '1' } },
+        partial: multiCallAssistant,
+      },
+      { type: 'toolcall_start', contentIndex: 1, partial: multiCallAssistant },
+      { type: 'toolcall_delta', contentIndex: 1, delta: '{"q":"2"}', partial: multiCallAssistant },
+      {
+        type: 'toolcall_end',
+        contentIndex: 1,
+        toolCall: { type: 'toolCall', id: 'call-dup', name: 'search', arguments: { q: '2' } },
+        partial: multiCallAssistant,
+      },
+      { type: 'done', reason: 'toolUse', message: multiCallAssistant },
+    )))
+
+    const toolDeltas = chunks.filter(c => c.type === 'tool-call-delta')
+    expect(toolDeltas[0]?.id).toBe('call-dup')
+    expect(toolDeltas[1]?.id).toBe('call-dup#2')
+
+    const toolBlocks = chunks.filter(c => c.type === 'block-end').map(c => (c as { block: { id: string } }).block)
+    expect(toolBlocks[0]?.id).toBe('call-dup')
+    expect(toolBlocks[1]?.id).toBe('call-dup#2')
+  })
+
   it('tolerates toolcall_start with a missing partial entry', async () => {
     const chunks = await collect(toStreamChunks(feed(
       { type: 'toolcall_start', contentIndex: 0, partial: assistant() },
