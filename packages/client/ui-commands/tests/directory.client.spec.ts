@@ -158,6 +158,38 @@ describe('invalidateAll (commands-changed soft)', () => {
     dir.invalidateAll()
     expect(calls).toEqual([])
   })
+
+  it('coalesces rapid invalidateAll calls during an in-flight pull into a single trailing refresh', async () => {
+    const { dir, pull, countOf } = bench()
+    const a = dir.refresh(S1)
+    pull(S1, 0).resolve(CMDS)
+    await a
+
+    // First invalidate starts in-flight pull #1
+    dir.invalidateAll()
+    expect(countOf(S1)).toBe(2)
+
+    // Rapid storm of invalidateAll calls while pull #1 is still flying
+    for (let i = 0; i < 20; i++) {
+      dir.invalidateAll()
+    }
+    // Flood guard: no new concurrent pulls launched into the browser connection pool
+    expect(countOf(S1)).toBe(2)
+
+    // Settle pull #1
+    pull(S1, 1).resolve([{ name: 'mid', description: 'mid world' }])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // Trailing pull #2 was automatically launched
+    expect(countOf(S1)).toBe(3)
+    pull(S1, 2).resolve([{ name: 'final', description: 'final world' }])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(dir.resolve(S1, 'final')).toBeDefined()
+    expect(dir.resolve(S1, 'mid')).toBeUndefined()
+  })
 })
 
 describe('resetConnected (reconnect hard)', () => {

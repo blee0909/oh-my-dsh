@@ -57,9 +57,33 @@ export class CommandDirectory {
     return entry.commands.find(c => c.name === name)
   }
 
-  /** Soft invalidation (commands-changed): background repull on every touched key; ready snapshots keep serving. */
+  /** In-flight pull promise per session key. */
+  private readonly flyingPulls = new Map<SessionId, Promise<void>>()
+  /** Keys queued for a trailing repull while a pull was already in flight. */
+  private readonly queuedPulls = new Set<SessionId>()
+
+  /** Soft invalidation (commands-changed): background repull on every touched key with in-flight coalescing. */
   invalidateAll(): void {
-    for (const key of this.entries.keys()) void this.refresh(key)
+    for (const key of this.entries.keys()) {
+      if (this.flyingPulls.has(key)) {
+        this.queuedPulls.add(key)
+      } else {
+        void this.coalescedPull(key)
+      }
+    }
+  }
+
+  private async coalescedPull(sessionId: SessionId): Promise<void> {
+    const pull = this.refresh(sessionId)
+    this.flyingPulls.set(sessionId, pull)
+    try {
+      await pull
+    } finally {
+      this.flyingPulls.delete(sessionId)
+      if (this.queuedPulls.delete(sessionId)) {
+        void this.coalescedPull(sessionId)
+      }
+    }
   }
 
   /**

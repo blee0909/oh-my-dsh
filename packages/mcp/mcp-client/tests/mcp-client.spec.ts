@@ -702,6 +702,28 @@ describe('tool execution', () => {
     expect(textAt(result.content)).not.toContain('storage rejected')
   })
 
+  it('bounds image storage with a deadline and falls back to diagnostic text on timeout', async () => {
+    const rich = await mountRichRegistry()
+    vi.spyOn(rich.attachments, 'saveImages').mockImplementationOnce(
+      () => new Promise(resolve => setTimeout(() => resolve([]), 200)),
+    )
+    const client = createMockClient(
+      [{ name: 'img', inputSchema: { type: 'object' } }],
+      { content: [{ type: 'image', mimeType: 'image/png', data: 'AQ==' }] },
+    )
+
+    await syncTools(client as never, rich.ctx, { ...defaultOpts, imageStorageTimeoutMs: 15 }, new Map())
+    const result = await rich.ctx.tools.execute({
+      signal: testToolSignal,
+      callId: ToolCallId('store-timeout'),
+      name: 'mcp__srv__img',
+      arguments: {},
+      agent: agentOn() as never,
+    })
+
+    expect(textAt(result.content)).toContain('durable image storage rejected the result')
+  })
+
   it('lets post-execute replacement win over a prepared image projection', async () => {
     const rich = await mountRichRegistry()
     rich.ctx.on('tools/post-execute', async (): Promise<PostToolDecision> => ({

@@ -24,6 +24,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { ToolDefinition, ToolExecution, ToolExecutionResult } from '@deepseek-ai/dsh-tools'
 import { assertSupportedJsonSchema } from '@deepseek-ai/dsh-tools'
 import type { JsonSchemaNode } from '@deepseek-ai/dsh-tools'
+import { deadline } from '@deepseek-ai/dsh-timeout'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 
 /** Resolved options relevant to tool bridging. */
@@ -32,6 +33,8 @@ export interface ToolBridgeOptions {
   registrationFailure: 'contain' | 'throw'
   serverName: string
   toolCallTimeoutMs: number
+  /** Timeout in milliseconds for persisting decoded MCP images to durable storage. Default: 30,000. */
+  imageStorageTimeoutMs?: number
 }
 
 /** State for one sync generation: the current set of disposers keyed by public name. */
@@ -354,7 +357,7 @@ function createExecutor(
     }
     if (containsImage(content)) {
       const fallback: ContentBlock[] = [{ type: 'text', text: extractText(content, rawName) }]
-      const projected = await prepareImageProjection(ctx, exec, content, rawName)
+      const projected = await prepareImageProjection(ctx, exec, content, rawName, opts.imageStorageTimeoutMs)
       projections.set(exec, { value, fallback, content: projected })
     }
     return value
@@ -436,6 +439,7 @@ async function prepareImageProjection(
   exec: ToolExecution,
   content: JsonValue[],
   toolName: string,
+  timeoutMs = 30_000,
 ): Promise<ContentBlock[]> {
   const decoded: SaveImageAttachment[] = []
   const validationErrors = new Map<number, string>()
@@ -469,8 +473,9 @@ async function prepareImageProjection(
     return projectContent(content, toolName, block => ({ type: 'text', text: imageDiagnostic(block, reason) }))
   }
 
+  const dl = deadline(exec.signal, timeoutMs, 'MCP_IMAGE_STORAGE_TIMEOUT')
   try {
-    const refs = await attachments.saveImages(decoded)
+    const refs = await withDeadline(attachments.saveImages(decoded), dl.signal)
     const byIndex = new Map(imageIndexes.map((index, offset) => [index, refs[offset] as ImageAttachmentRef] as const))
     return projectContent(content, toolName, (_block, index) => ({
       type: 'image',
@@ -484,7 +489,28 @@ async function prepareImageProjection(
       type: 'text',
       text: imageDiagnostic(block, reason),
     }))
+  } finally {
+    dl[Symbol.dispose]()
   }
+}
+
+/** Race a promise with an AbortSignal deadline. */
+function withDeadline<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => { reject(signal.reason) }
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (val) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(val)
+      },
+      (err) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(err)
+      },
+    )
+  })
 }
 
 /**
