@@ -40,13 +40,14 @@ export const name = 'web-search-deepseek'
 /** The web seam this provider registers into. */
 export const inject = ['web']
 
-const DEFAULT_API_KEY_ENV = 'DEEPSEEK_API_KEY'
+const DEFAULT_API_KEY_ENV = 'DEEPSEEK_SEARCH_API_KEY'
+const LEGACY_API_KEY_ENV = 'DEEPSEEK_API_KEY'
 
 /** Plugin config (all optional — `apply` fills env-var and constant defaults). */
 export interface Config {
   /** Literal DeepSeek API key; prefer {@link apiKeyEnv} so no secret enters configuration files. */
   apiKey?: string
-  /** Credential reference resolved for each search; defaults to `DEEPSEEK_API_KEY`. */
+  /** Credential reference resolved for each search; defaults to `DEEPSEEK_SEARCH_API_KEY`. */
   apiKeyEnv?: string
   /** Anthropic-compatible endpoint base; `/messages` is appended. */
   baseURL?: string
@@ -101,10 +102,23 @@ function resolveOptions(ctx: Context, config: Config): DeepSeekSearchProviderOpt
     ...literalApiKey === undefined ? {} : { apiKey: literalApiKey },
     resolveApiKey: async () => {
       const credentials = ctx.get('credentials')
-      if (credentials !== undefined) return (await credentials.resolve(apiKeyEnv))?.value
+      if (credentials !== undefined) {
+        const resolved = await credentials.resolve(apiKeyEnv)
+        if (resolved?.value !== undefined && resolved.value.length > 0) return resolved.value
+        // Backward-compatible fallback: if using default search key ref and unset, check legacy key ref (#5916)
+        if (apiKeyEnv === DEFAULT_API_KEY_ENV) {
+          const fallback = await credentials.resolve(credentialRef(LEGACY_API_KEY_ENV))
+          if (fallback?.value !== undefined && fallback.value.length > 0) return fallback.value
+        }
+      }
       // Without the seam the environment is the whole credential plane.
       const ambient = launchEnvironmentOf(ctx).get(apiKeyEnv)
-      return ambient !== undefined && ambient.value.length > 0 ? ambient.value : undefined
+      if (ambient !== undefined && ambient.value.length > 0) return ambient.value
+      if (apiKeyEnv === DEFAULT_API_KEY_ENV) {
+        const fallbackAmbient = launchEnvironmentOf(ctx).get(LEGACY_API_KEY_ENV)
+        if (fallbackAmbient !== undefined && fallbackAmbient.value.length > 0) return fallbackAmbient.value
+      }
+      return undefined
     },
     apiKeyEnv,
     baseURL: config.baseURL

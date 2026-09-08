@@ -121,4 +121,31 @@ describe('web-search-deepseek settings section', () => {
     expect(bench.ctx.settings.describe().map(row => String(row.ns))).not.toContain('web-search-deepseek')
     await bench.ctx.fiber.dispose()
   })
+
+  it('defaults to isolated DEEPSEEK_SEARCH_API_KEY and falls back to DEEPSEEK_API_KEY (#5916)', async () => {
+    const ctx = new Context()
+    await ctx.plugin(WebRuntime, {})
+    const credentials = {
+      resolve: vi.fn(async (ref: string) => {
+        if (ref === 'DEEPSEEK_API_KEY') return { value: 'legacy-key' }
+        return undefined
+      }),
+    }
+    ctx.provide('credentials', credentials as never)
+
+    const pluginFiber = ctx.plugin(deepseekPlugin, { baseURL: 'https://search.entry.test/v1' })
+    await pluginFiber.await()
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockImplementation(() => Promise.resolve(jsonResponse(ONE_RESULT)))
+
+    await ctx.web.search({ query: 'test' })
+
+    expect(credentials.resolve).toHaveBeenCalledWith('DEEPSEEK_SEARCH_API_KEY')
+    expect(credentials.resolve).toHaveBeenCalledWith('DEEPSEEK_API_KEY')
+    const headers = fetchSpy.mock.calls.at(-1)?.[1]?.headers as Record<string, string>
+    expect(headers?.['x-api-key']).toBe('legacy-key')
+
+    await ctx.fiber.dispose()
+  })
 })

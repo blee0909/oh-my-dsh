@@ -562,4 +562,28 @@ describe('connection node half over a real HTTP server', () => {
       await dispose()
     }
   })
+
+  it('allows third-party plugin without webServer in its inject list to register an RPC channel (#5926)', async () => {
+    const ctx = new Context()
+    const routes: WebRoute[] = []
+    provideBrowserCredentials(ctx)
+    ctx.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+
+    // Create a third-party plugin context that does NOT declare webServer in its inject list
+    let thirdPartyRegistered = false
+    const subFiber = ctx.plugin({
+      inject: ['connection'],
+      apply(pluginCtx) {
+        // Calling connection.rpc.handle should NOT throw "cannot get property 'webServer' without inject"
+        const remove = pluginCtx.connection.rpc.handle('/dsh-ssh', async () => ({ ok: true, value: {} }))
+        thirdPartyRegistered = routes.some(r => r.path === '/dsh-ssh')
+        pluginCtx.effect(() => remove, 'dsh-ssh channel')
+      },
+    })
+    await subFiber.await()
+
+    expect(thirdPartyRegistered).toBe(true)
+  })
 })
