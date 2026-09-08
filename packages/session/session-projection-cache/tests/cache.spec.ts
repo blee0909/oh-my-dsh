@@ -384,6 +384,8 @@ describe('SessionProjectionCache listing read', () => {
     expect(cache.cachedSnapshot(seededHeader, SessionLogOffset(2))?.values['cache-test/marks'])
       .toEqual({ marks: ['seed'] })
     expect(cache.cachedSnapshot(seededHeader, SessionLogOffset(1))).toBeUndefined()
+    expect(cache.cachedSnapshot(seededHeader, SessionLogOffset(0))?.values['cache-test/marks'])
+      .toEqual({ marks: ['seed'] })
     expect(() => cache.cachedSnapshot(headerOf(id), SessionLogOffset(1)))
       .toThrow('unseeded projection-cache identity inherited event count must be 0')
   })

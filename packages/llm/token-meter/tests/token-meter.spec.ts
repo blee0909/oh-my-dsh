@@ -543,6 +543,38 @@ describe('malformed replay and listener lifecycle', () => {
     )
   })
 
+  it('allows third-party replace markers with null turn/step without requiring step/start', () => {
+    const session = Session.create(SessionId('marker-replace'))
+    const head = session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'original prompt' }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' }).seq
+    appendHeader(session, header('deepseek-v4-flash'))
+
+    appendUnchecked(session, {
+      type: 'assistant/message',
+      seq: SessionSeq(session.seq),
+      time: 0,
+      data: {
+        stream: [],
+        turn: null as unknown as number,
+        step: null as unknown as number,
+        message: createMessage({
+          role: 'assistant',
+          content: [{ type: 'text', text: '[message recalled by plugin]' }],
+          source: { kind: 'plugin', plugin: 'recall' },
+        }) as never,
+      },
+      surfaceOp: { op: 'replace', start: head, end: head },
+      sourceEventSeqs: [head],
+    })
+
+    const m = meter()
+    const measurement = m.measure(session)
+    expect(measurement.logRevision).toBe(3)
+    expect(measurement.surfaceTokens).toBeGreaterThan(0)
+  })
+
   it('rejects corrupt replacement ranges without advancing the replay cursor', () => {
     const session = Session.create(SessionId('bad-replace'))
     const head = session.append('user/message', createUserMessage({

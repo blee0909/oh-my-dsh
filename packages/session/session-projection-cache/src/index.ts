@@ -507,10 +507,14 @@ function lifecycleIdentityMatches(
   stored: CheckpointIdentity,
   expected: CurrentCheckpointIdentity,
 ): boolean {
+  const matchesLineage = (stored.isSeeded ?? false) === expected.isSeeded
+    && (
+      (stored.inheritedEventCount ?? 0) === expected.inheritedEventCount
+      || (expected.isSeeded && expected.inheritedEventCount === 0)
+    )
   return stored.createdAt === expected.createdAt
     && stored.cwd === expected.cwd
-    && (stored.isSeeded ?? false) === expected.isSeeded
-    && (stored.inheritedEventCount ?? 0) === expected.inheritedEventCount
+    && matchesLineage
 }
 
 export default SessionProjectionCache

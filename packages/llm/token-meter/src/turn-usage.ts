@@ -1,6 +1,7 @@
 import { lastAssistantStreamChunk } from '@deepseek-ai/dsh-llm/assistant-stream'
 import type { AssistantMessage, TokenUsage } from '@deepseek-ai/dsh-llm/types'
 import type {} from '@deepseek-ai/dsh-llm-retry/types'
+import { isSurfaceEvent } from '@deepseek-ai/dsh-session'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 
 /** One provider/model route that contributed a billed request attempt. */
@@ -237,6 +238,13 @@ export function deriveTurnTokenUsage(events: readonly SessionEvent[]): TurnToken
       continue
     }
     if (event.type === 'assistant/message') {
+      if (isSurfaceEvent(event)
+        && typeof event.surfaceOp === 'object'
+        && event.surfaceOp.op === 'replace'
+        && (event.data.turn as unknown) == null
+        && (event.data.step as unknown) == null) {
+        continue
+      }
       if (event.data.turn !== turn
         || state.kind !== 'open'
         || !sameAttempt(state, event.data.turn, event.data.step)) {

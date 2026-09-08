@@ -272,10 +272,8 @@ export class ApiSessionList {
     try {
       const cache = this.ctx.get('sessionProjectionCache')
       const block = session === undefined
-        ? header.isSeeded
-          ? undefined
-          : cache?.cachedSnapshot(header, SessionLogOffset(0))
-            ?? cache?.cachedPredecessorTitle(header, SessionLogOffset(0))
+        ? cache?.cachedSnapshot(header, SessionLogOffset(0))
+          ?? cache?.cachedPredecessorTitle(header, SessionLogOffset(0))
         : this.ctx.sessionProjections.cachedSnapshot(session)
       return block !== undefined && Object.keys(block.values).length > 0
         ? {

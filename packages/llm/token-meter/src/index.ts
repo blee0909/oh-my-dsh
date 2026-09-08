@@ -275,29 +275,37 @@ export class TokenMeter extends Service {
       : undefined
 
     if (event.type === 'assistant/message') {
-      const stepStart = state.stepStart
-      if (stepStart === undefined
-        || stepStart.turn !== event.data.turn
-        || stepStart.step !== event.data.step) {
-        throw new Error(`token meter: assistant/message at seq ${event.seq} has no matching step/start event`)
-      }
+      const isReplaceMarker = isSurfaceEvent(event)
+        && typeof event.surfaceOp === 'object'
+        && event.surfaceOp.op === 'replace'
+        && (event.data.turn as unknown) == null
+        && (event.data.step as unknown) == null
 
-      // assistant/message is surface-mandatory at every append/seed boundary.
-      // oxlint-disable-next-line typescript/no-non-null-assertion
-      const eventTokens = plan!.tokens
-      if (event.data.usage !== undefined && nextHeader !== undefined) {
-        nextAnchor = {
-          header: nextHeader,
-          nodes: stepStart.nodes,
-          assistantTokens: this._estimateProviderAssistant(event),
-          usage: event.data.usage,
+      if (!isReplaceMarker) {
+        const stepStart = state.stepStart
+        if (stepStart === undefined
+          || stepStart.turn !== event.data.turn
+          || stepStart.step !== event.data.step) {
+          throw new Error(`token meter: assistant/message at seq ${event.seq} has no matching step/start event`)
         }
-      } else {
-        nextAnchor = {
-          header: nextHeader,
-          nodes: stepStart.nodes,
-          assistantTokens: eventTokens,
-          usage: undefined,
+
+        // assistant/message is surface-mandatory at every append/seed boundary.
+        // oxlint-disable-next-line typescript/no-non-null-assertion
+        const eventTokens = plan!.tokens
+        if (event.data.usage !== undefined && nextHeader !== undefined) {
+          nextAnchor = {
+            header: nextHeader,
+            nodes: stepStart.nodes,
+            assistantTokens: this._estimateProviderAssistant(event),
+            usage: event.data.usage,
+          }
+        } else {
+          nextAnchor = {
+            header: nextHeader,
+            nodes: stepStart.nodes,
+            assistantTokens: eventTokens,
+            usage: undefined,
+          }
         }
       }
     }
