@@ -247,4 +247,44 @@ describe('BrowserAuth', () => {
     await expect(createAuth(new RecordCredentials(), Number.MAX_SAFE_INTEGER))
       .rejects.toThrow(/safe timestamp range/u)
   })
+
+  it('classifies rejection causes accurately via diagnose (#5932)', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-24T00:00:00.000Z'))
+    const store = new RecordCredentials()
+    const auth = await createAuth(store)
+    const { cookie } = exchange(auth)
+    const [name, value] = cookie.split('=') as [string, string]
+
+    expect(auth.diagnose({ headers: {} })).toBe('missing_authority')
+    expect(auth.diagnose({ headers: { host: '127.0.0.1:3080' } })).toBe('missing_cookie')
+    expect(auth.diagnose(request('/', '127.0.0.1:3080', { cookie: 'other=val' }))).toBe('cookie_not_found')
+    expect(auth.diagnose(request('/', '127.0.0.1:3080', { cookie: `${name}=not.valid.jwt` }))).toBe('invalid_format')
+    const fakeSig = Buffer.alloc(32).toString('base64url')
+    expect(auth.diagnose(request('/', '127.0.0.1:3080', { cookie: `${name}=v1.${value.split('.')[1]}.${fakeSig}` }))).toBe('signature_mismatch')
+    expect(auth.diagnose(request('/', '127.0.0.1:3080', { cookie }))).toBe('valid')
+
+    // Authority mismatch
+    expect(auth.diagnose(request('/', '127.0.0.1:3080', {
+      cookie: signedCookie(store, name, {
+        version: 1,
+        authority: 'other:3080',
+        issuedAt: Date.now(),
+        expiresAt: Date.now() + 1000,
+      }),
+    }))).toBe('authority_mismatch')
+
+    // Future issuance
+    vi.setSystemTime(new Date('2026-08-23T00:00:00.000Z'))
+    expect(auth.diagnose(request('/', '127.0.0.1:3080', { cookie }))).toBe('future_issued')
+
+    // Expiry
+    vi.setSystemTime(new Date('2026-09-25T00:00:00.000Z'))
+    expect(auth.diagnose(request('/', '127.0.0.1:3080', { cookie }))).toBe('expired')
+
+    // Max age exceeded
+    const shorter = await createAuth(store, 1)
+    vi.setSystemTime(new Date('2026-08-24T00:00:00.000Z'))
+    expect(shorter.diagnose(request('/', '127.0.0.1:3080', { cookie }))).toBe('max_age_exceeded')
+  })
 })

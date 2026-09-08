@@ -35,6 +35,10 @@ export interface Config {
    */
   prefix: string
   /**
+   * Legacy alias for prefix, supporting older user presets with `{ text: '...' }`.
+   */
+  text?: string
+  /**
    * Persona suffix template rendered after first-party guidance. Omitted or empty
    * text shadows the deployment suffix away; interpolation is strict.
    */
@@ -45,13 +49,40 @@ export interface Config {
   includeRuntimeContext?: boolean
 }
 
-/** Runtime schema for the persona row. */
-export const Config: z<Config> = z.object({
+const standardConfig = z.object({
   prefix: z.string().required(),
   suffix: z.string().default(''),
   complete: z.boolean().default(false),
   includeRuntimeContext: z.boolean().default(true),
 })
+
+const legacyObjectConfig = z.transform(
+  z.object({
+    text: z.string().required(),
+    suffix: z.string().default(''),
+    complete: z.boolean().default(false),
+    includeRuntimeContext: z.boolean().default(true),
+  }),
+  cfg => ({
+    prefix: cfg.text,
+    suffix: cfg.suffix,
+    complete: cfg.complete,
+    includeRuntimeContext: cfg.includeRuntimeContext,
+  }),
+)
+
+const legacyStringConfig = z.transform(
+  z.string(),
+  text => ({
+    prefix: text,
+    suffix: '',
+    complete: false,
+    includeRuntimeContext: true,
+  }),
+)
+
+/** Runtime schema for the persona row. */
+export const Config: z<Config> = z.union([standardConfig, legacyObjectConfig, legacyStringConfig]) as unknown as z<Config>
 
 /**
  * Register the persona prefix and suffix sections for the mounting context's scope.
@@ -60,10 +91,11 @@ export const Config: z<Config> = z.object({
  * @param config - the prefix, suffix, and complete-prompt policy.
  */
 export function apply(ctx: Context, config: Config): void {
+  const prefix = config.prefix ?? config.text ?? ''
   ctx.effect(() => ctx.systemPrompt.section({
     name: PERSONA_PREFIX_SECTION,
     order: ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'),
-    text: config.prefix,
+    text: prefix,
     ...(config.complete ? { complete: true } : {}),
   }), 'persona.section()')
   ctx.effect(() => ctx.systemPrompt.section({

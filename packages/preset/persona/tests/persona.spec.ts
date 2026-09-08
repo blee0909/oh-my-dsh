@@ -176,4 +176,33 @@ describe('the persona row', () => {
       { name: 'policy', text: 'global policy' },
     ])
   })
+
+  it('supports legacy object configuration with text property (#5915)', async () => {
+    const ctx = await harness('deployment identity')
+    const key: ScopeKey = { agent: 'legacy-obj' }
+    const scope = createScope(ctx, key)
+
+    await scope.ctx.plugin(Persona, { text: 'Legacy text identity.' } as never)
+    expect(await personaText(ctx, key)).toBe('Legacy text identity.')
+  })
+
+  it('supports legacy string configuration (#5915)', async () => {
+    const ctx = await harness('deployment identity')
+    const key: ScopeKey = { agent: 'legacy-str' }
+    const scope = createScope(ctx, key)
+
+    await scope.ctx.plugin(Persona, 'Legacy string identity.' as never)
+    expect(await personaText(ctx, key)).toBe('Legacy string identity.')
+  })
+
+  it('tolerates direct apply with text property bypassing schema (#5915)', async () => {
+    const ctx = await harness('deployment identity')
+    const key: ScopeKey = { agent: 'direct-text' }
+
+    await ctx.plugin(Object.assign((inner: Context) => {
+      Persona.apply(createScope(inner, key).ctx, { text: 'Direct text.' } as never)
+    }, { inject: ['systemPrompt'] }))
+
+    expect(await personaText(ctx, key)).toBe('Direct text.')
+  })
 })

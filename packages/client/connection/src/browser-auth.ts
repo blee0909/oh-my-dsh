@@ -19,6 +19,19 @@ const STORED_SECRET_VERSION = 1
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]*$/
 const PROCESS_LAUNCH_TOKENS = new WeakMap<object, string>()
 
+/** Fine-grained authentication verification diagnosis for script/test telemetry. */
+export type BrowserAuthReason =
+  | 'valid'
+  | 'missing_authority'
+  | 'missing_cookie'
+  | 'cookie_not_found'
+  | 'invalid_format'
+  | 'signature_mismatch'
+  | 'authority_mismatch'
+  | 'expired'
+  | 'future_issued'
+  | 'max_age_exceeded'
+
 interface StoredSecretPayload {
   readonly version: typeof STORED_SECRET_VERSION
   readonly secret: string
@@ -131,31 +144,36 @@ function encodeCookie(payload: BrowserCookiePayload, secret: Buffer): string {
   return `v1.${body}.${encodeBase64Url(signature(secret, body))}`
 }
 
-function decodeCookie(value: string, secret: Buffer): BrowserCookiePayload | undefined {
+type DecodedCookieResult =
+  | { readonly kind: 'valid'; readonly payload: BrowserCookiePayload }
+  | { readonly kind: 'invalid_format' }
+  | { readonly kind: 'signature_mismatch' }
+
+function inspectCookie(value: string, secret: Buffer): DecodedCookieResult {
   const parts = value.split('.')
   const [version, body, encodedSignature] = parts
   if (parts.length !== 3 || version !== 'v1' || body === undefined || encodedSignature === undefined) {
-    return undefined
+    return { kind: 'invalid_format' }
   }
   const actualSignature = decodeBase64Url(encodedSignature)
-  if (actualSignature === undefined) return undefined
+  if (actualSignature === undefined) return { kind: 'invalid_format' }
   const expectedSignature = signature(secret, body)
   if (actualSignature.byteLength !== expectedSignature.byteLength
-    || !timingSafeEqual(actualSignature, expectedSignature)) return undefined
+    || !timingSafeEqual(actualSignature, expectedSignature)) return { kind: 'signature_mismatch' }
   let decoded: unknown
   try {
     const bodyBytes = decodeBase64Url(body)
-    if (bodyBytes === undefined) return undefined
+    if (bodyBytes === undefined) return { kind: 'invalid_format' }
     decoded = JSON.parse(bodyBytes.toString('utf8'))
   } catch {
-    return undefined
+    return { kind: 'invalid_format' }
   }
   if (!isRecord(decoded)
     || decoded.version !== COOKIE_PAYLOAD_VERSION
     || typeof decoded.authority !== 'string'
     || !Number.isSafeInteger(decoded.issuedAt)
-    || !Number.isSafeInteger(decoded.expiresAt)) return undefined
-  return decoded as unknown as BrowserCookiePayload
+    || !Number.isSafeInteger(decoded.expiresAt)) return { kind: 'invalid_format' }
+  return { kind: 'valid', payload: decoded as unknown as BrowserCookiePayload }
 }
 
 async function initializeSecret(credentials: CredentialProvider): Promise<Buffer> {
@@ -282,23 +300,36 @@ export class BrowserAuth {
   }
 
   /**
+   * Diagnose the authority-bound browser cookie on a Host request.
+   * @param request - request headers carrying Host and Cookie.
+   * @returns 'valid' on success or a specific failure classification.
+   */
+  diagnose(request: ConnectionTrustRequest): BrowserAuthReason {
+    const authority = requestAuthority(request.headers)
+    if (authority === undefined) return 'missing_authority'
+    const rawCookie = header(request.headers, 'cookie')
+    if (rawCookie === undefined) return 'missing_cookie'
+    const value = cookieValue(rawCookie, cookieName(authority))
+    if (value === undefined) return 'cookie_not_found'
+    const inspected = inspectCookie(value, this.secret)
+    if (inspected.kind !== 'valid') return inspected.kind
+    const { payload } = inspected
+    if (payload.authority !== authority) return 'authority_mismatch'
+    const now = Date.now()
+    if (payload.issuedAt > now) return 'future_issued'
+    if (payload.expiresAt <= now) return 'expired'
+    if (payload.expiresAt <= payload.issuedAt
+      || payload.expiresAt - payload.issuedAt > this.maxAgeMilliseconds) return 'max_age_exceeded'
+    return 'valid'
+  }
+
+  /**
    * Verify the authority-bound browser cookie on a Host request.
    * @param request - request headers carrying Host and Cookie.
    * @returns true only for an unexpired cookie signed by this activation's loaded secret.
    */
   isAuthenticated(request: ConnectionTrustRequest): boolean {
-    const authority = requestAuthority(request.headers)
-    const rawCookie = header(request.headers, 'cookie')
-    if (authority === undefined || rawCookie === undefined) return false
-    const value = cookieValue(rawCookie, cookieName(authority))
-    if (value === undefined) return false
-    const payload = decodeCookie(value, this.secret)
-    if (payload === undefined || payload.authority !== authority) return false
-    const now = Date.now()
-    return payload.issuedAt <= now
-      && payload.expiresAt > now
-      && payload.expiresAt > payload.issuedAt
-      && payload.expiresAt - payload.issuedAt <= this.maxAgeMilliseconds
+    return this.diagnose(request) === 'valid'
   }
 
   private writeUnauthorized(req: ConnectionIndexRequest, res: ConnectionIndexResponse): void {
