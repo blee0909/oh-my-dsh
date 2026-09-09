@@ -85,9 +85,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 })
 
 vi.mock('fs-ext', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('fs-ext')>()
+  let originalFlock: ((fd: number, flags: never, callback: (error: Error | null) => void) => void) | undefined
+  try {
+    const actual = await importOriginal<typeof import('fs-ext')>()
+    originalFlock = actual.flock as typeof originalFlock
+  } catch {
+    // fs-ext native binding may not be compiled on Windows / non-POSIX platforms
+  }
   return {
-    ...actual,
     flock: ((fd: number, flags: never, callback: (error: Error | null) => void) => {
       if (refuse.flock) {
         refuse.flock = false
@@ -99,8 +104,12 @@ vi.mock('fs-ext', async (importOriginal) => {
         callback(Object.assign(new Error('EWOULDBLOCK: injected contention'), { code: 'EWOULDBLOCK' }))
         return
       }
-      (actual.flock as (fd: number, flags: never, callback: (error: Error | null) => void) => void)(fd, flags, callback)
-    }) as typeof actual.flock,
+      if (originalFlock) {
+        originalFlock(fd, flags, callback)
+      } else {
+        callback(null)
+      }
+    }) as typeof import('fs-ext').flock,
   }
 })
 
