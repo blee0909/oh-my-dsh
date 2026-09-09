@@ -39,7 +39,7 @@ const refuse = vi.hoisted(() => ({
   lockOpen: false,
   /** Next flock call fails EACCES (a non-contention kernel refusal). */
   flock: false,
-  /** Next flock call fails EWOULDBLOCK (the Windows LockFileEx contention code). */
+  /** Next flock call fails EWOULDBLOCK. */
   flockBusy: false,
   /** Next stat of a lock file fails EACCES (unreadable path). */
   lockStat: false,
@@ -84,32 +84,20 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   }
 })
 
-vi.mock('fs-ext', async (importOriginal) => {
-  let originalFlock: ((fd: number, flags: never, callback: (error: Error | null) => void) => void) | undefined
-  try {
-    const actual = await importOriginal<typeof import('fs-ext')>()
-    originalFlock = actual.flock as typeof originalFlock
-  } catch {
-    // fs-ext native binding may not be compiled on Windows / non-POSIX platforms
-  }
+vi.mock('@deepseek-ai/node-addon-system/flock', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@deepseek-ai/node-addon-system/flock')>()
   return {
-    flock: ((fd: number, flags: never, callback: (error: Error | null) => void) => {
+    tryLockExclusive: async (fd: number): Promise<void> => {
       if (refuse.flock) {
         refuse.flock = false
-        callback(Object.assign(new Error('EACCES: injected flock refusal'), { code: 'EACCES' }))
-        return
+        throw Object.assign(new Error('EACCES: injected flock refusal'), { code: 'EACCES' })
       }
       if (refuse.flockBusy) {
         refuse.flockBusy = false
-        callback(Object.assign(new Error('EWOULDBLOCK: injected contention'), { code: 'EWOULDBLOCK' }))
-        return
+        throw Object.assign(new Error('EWOULDBLOCK: injected contention'), { code: 'EWOULDBLOCK' })
       }
-      if (originalFlock) {
-        originalFlock(fd, flags, callback)
-      } else {
-        callback(null)
-      }
-    }) as typeof import('fs-ext').flock,
+      return actual.tryLockExclusive(fd)
+    },
   }
 })
 

@@ -44,3 +44,4 @@ worktrees/
 .agents/worktrees/
 .typert-*/
 .codegraph/
+native/system/test/bin/
