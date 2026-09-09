@@ -14,15 +14,18 @@ export function assertNever(value: never, context?: string): never {
   throw new Error(`unreachable variant${context ? ` in ${context}` : ''}: ${rendered}`)
 }
 
+/** Pattern conforming to ECMAScript NativeFunction syntax across JavaScript engines (V8, JavaScriptCore/Safari, SpiderMonkey). */
+const NATIVE_FUNCTION_SOURCE = /^function\s+([A-Za-z$_][\w$]*)\s*\(\s*\)\s*\{\s*\[native code\]\s*\}$/u
+
 /** Whether a realm-owned intrinsic prototype is backed by its native constructor. */
 function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): boolean {
   const descriptor = Object.getOwnPropertyDescriptor(prototype, 'constructor')
   const constructor: unknown = descriptor?.value
   if (typeof constructor !== 'function') return false
   try {
-    return constructor.name === name
-      && constructor.prototype === prototype
-      && Function.prototype.toString.call(constructor) === `function ${name}() { [native code] }`
+    if (constructor.name !== name || constructor.prototype !== prototype) return false
+    const match = NATIVE_FUNCTION_SOURCE.exec(Function.prototype.toString.call(constructor))
+    return match !== null && match[1] === name
   } catch {
     return false
   }

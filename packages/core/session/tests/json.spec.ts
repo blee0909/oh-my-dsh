@@ -246,4 +246,29 @@ describe('isJsonValue', () => {
     expect(isJsonValue(new Exotic())).toBe(false)
     expect(isJsonValue(cyclic)).toBe(false)
   })
+
+  it('accepts intrinsic containers formatted by JavaScriptCore/Safari NativeFunction toString', () => {
+    const originalToString = Function.prototype.toString
+    try {
+      Function.prototype.toString = function patched(this: unknown): string {
+        if (this === Object) return 'function Object() {\n    [native code]\n}'
+        if (this === Array) return 'function Array() {\n    [native code]\n}'
+        return originalToString.call(this)
+      }
+      const data = { nested: [1, 2, { ok: true }] }
+      expect(isJsonValue(data)).toBe(true)
+      const snapshot = snapshotJsonValue(data)
+      expect(snapshot).toEqual({ nested: [1, 2, { ok: true }] })
+
+      // Forged or malicious toString must still be rejected
+      Function.prototype.toString = function forged(this: unknown): string {
+        if (this === Object) return 'function Object() { return "[native code]" }'
+        return originalToString.call(this)
+      }
+      expect(isJsonValue({})).toBe(false)
+      expect(snapshotJsonValue({})).toBeUndefined()
+    } finally {
+      Function.prototype.toString = originalToString
+    }
+  })
 })
