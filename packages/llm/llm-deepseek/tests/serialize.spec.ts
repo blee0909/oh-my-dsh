@@ -8,6 +8,7 @@ import {
   serializeMessagesWithImages,
   serializeRequest,
   serializeRequestWithImages,
+  SYNTHETIC_TOOL_RESULT_TEXT,
 } from '../src/serialize.ts'
 import type { ImageSerializationOptions } from '../src/serialize.ts'
 
@@ -127,14 +128,14 @@ describe('serializeMessages', () => {
         source: { kind: 'plugin', plugin: 'test' },
       }),
     ])
-    expect(wire).toEqual([{
+    expect(wire[0]).toEqual({
       role: 'assistant',
       // "" (not null) on tool-call turns — mirrors the official samples'
       // verbatim message replay; some gateways reject null.
       content: '',
       reasoning_content: 'I should check the weather.',
       tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'get_weather', arguments: '{"city":"Paris"}' } }],
-    }])
+    })
   })
 
   it('serializes parallel tool calls in order', () => {
@@ -755,5 +756,139 @@ describe('review fixes: assistant content shapes', () => {
       source: { kind: 'plugin', plugin: 'test' },
     })])
     expect(wire[0]).toMatchObject({ content: '' })
+  })
+})
+
+describe('Discussions #6127: dangling tool_calls auto-synthesis', () => {
+  it('auto-synthesizes a tool message for an unclosed tool call at the conversation tail (tail truncation MRE)', () => {
+    const wire = serializeMessages([
+      createMessage({
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', id: ToolCallId('call_tail_1'), name: 'read', arguments: '{"file_path":"test.txt"}' },
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+    ])
+
+    expect(wire).toHaveLength(2)
+    expect(wire[0]).toMatchObject({
+      role: 'assistant',
+      tool_calls: [{ id: 'call_tail_1', type: 'function', function: { name: 'read' } }],
+    })
+    expect(wire[1]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call_tail_1',
+      content: SYNTHETIC_TOOL_RESULT_TEXT,
+    })
+  })
+
+  it('auto-synthesizes missing tool messages for partial dangling calls in parallel tool execution', () => {
+    const wire = serializeMessages([
+      createMessage({
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', id: ToolCallId('call_1'), name: 'read', arguments: '{}' },
+          { type: 'tool-call', id: ToolCallId('call_2'), name: 'write', arguments: '{}' },
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+      createUserMessage({
+        content: [
+          { type: 'tool-result', toolCallId: ToolCallId('call_1'), content: [{ type: 'text', text: 'file content' }] },
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+    ])
+
+    expect(wire).toHaveLength(3)
+    expect(wire[0]).toMatchObject({ role: 'assistant' })
+    expect(wire[1]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call_1',
+      content: 'file content',
+    })
+    expect(wire[2]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call_2',
+      content: SYNTHETIC_TOOL_RESULT_TEXT,
+    })
+  })
+
+  it('synthesizes pending tool messages before a user message with fresh text prompt', () => {
+    const wire = serializeMessages([
+      createMessage({
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', id: ToolCallId('call_interrupted'), name: 'run', arguments: '{}' },
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+      createUserMessage({
+        content: [{ type: 'text', text: 'stop that and do this instead' }],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+    ])
+
+    expect(wire).toHaveLength(3)
+    expect(wire[0]).toMatchObject({ role: 'assistant' })
+    expect(wire[1]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call_interrupted',
+      content: SYNTHETIC_TOOL_RESULT_TEXT,
+    })
+    expect(wire[2]).toEqual({
+      role: 'user',
+      content: 'stop that and do this instead',
+    })
+  })
+
+  it('synthesizes pending tool messages before a subsequent assistant turn', () => {
+    const wire = serializeMessages([
+      createMessage({
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', id: ToolCallId('call_abandoned'), name: 'calc', arguments: '{}' },
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+      createMessage({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'I changed my mind.' }],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+    ])
+
+    expect(wire).toHaveLength(3)
+    expect(wire[0]).toMatchObject({ role: 'assistant' })
+    expect(wire[1]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call_abandoned',
+      content: SYNTHETIC_TOOL_RESULT_TEXT,
+    })
+    expect(wire[2]).toEqual({
+      role: 'assistant',
+      content: 'I changed my mind.',
+    })
+  })
+
+  it('auto-synthesizes dangling tool calls during image serialization', async () => {
+    const wire = await serializeMessagesWithImages([
+      createMessage({
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', id: ToolCallId('call_image_tail'), name: 'inspect', arguments: '{}' },
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+    ], imageOptions([]))
+
+    expect(wire).toHaveLength(2)
+    expect(wire[0]).toMatchObject({ role: 'assistant' })
+    expect(wire[1]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call_image_tail',
+      content: SYNTHETIC_TOOL_RESULT_TEXT,
+    })
   })
 })

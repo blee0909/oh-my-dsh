@@ -10,6 +10,7 @@ import { contentHasImage, LlmError, offloadedImageText, offloadRequestImagesWith
 import type { ContentBlock, GenerateOptions, ImageAttachmentAccessResolver, Message } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 import type {
+  WireAssistantMessage,
   WireImageContentPart,
   WireMessage,
   WireRequest,
@@ -67,6 +68,9 @@ export interface ImageWireLocation {
 }
 
 const TOOL_RESULT_IMAGE_TEXT = 'Attached image(s) from tool result:'
+
+/** Default synthetic content used to safely close interrupted or unfulfilled tool calls (Discussions #6127). */
+export const SYNTHETIC_TOOL_RESULT_TEXT = 'Execution interrupted: no tool result provided'
 
 /** Validate the adapter-owned effort before resolving its DeepSeek wire fields. */
 function reasoningEffort(effort: NonNullable<GenerateOptions['reasoningEffort']>): 'off' | 'low' | 'high' | 'max' {
@@ -200,7 +204,7 @@ function userContent(parts: readonly WireUserContentPart[]): string | WireUserCo
 }
 
 /** Serialize one assistant message (text + reasoning + tool calls). */
-function serializeAssistant(message: Message): WireMessage {
+function serializeAssistant(message: Message): WireAssistantMessage {
   const text = flattenText(message.content)
   const reasoning = message.content
     .filter(block => block.type === 'reasoning')
@@ -235,6 +239,18 @@ function serializeAssistant(message: Message): WireMessage {
   }
 }
 
+/** Synthesize missing tool messages for unfulfilled assistant tool calls to prevent DeepSeek 400 errors (Discussions #6127). */
+function flushPendingCalls(wire: WireMessage[], pendingCalls: string[]): void {
+  for (const callId of pendingCalls) {
+    wire.push({
+      role: 'tool',
+      tool_call_id: callId,
+      content: SYNTHETIC_TOOL_RESULT_TEXT,
+    })
+  }
+  pendingCalls.length = 0
+}
+
 /**
  * Serialize the conversation. `tool-result` blocks become standalone
  * `{role: 'tool'}` messages; the harness puts each tool result in its own
@@ -245,32 +261,58 @@ function serializeAssistant(message: Message): WireMessage {
  */
 export function serializeMessages(messages: Message[]): WireMessage[] {
   const wire: WireMessage[] = []
+  const pendingCalls: string[] = []
+
   for (const message of messages) {
     assertTextOnly(message.content)
     if (message.role === 'system') {
+      flushPendingCalls(wire, pendingCalls)
       wire.push({ role: 'system', content: flattenText(message.content) })
       continue
     }
     if (message.role === 'assistant') {
-      wire.push(serializeAssistant(message))
+      flushPendingCalls(wire, pendingCalls)
+      const wireAssistant = serializeAssistant(message)
+      wire.push(wireAssistant)
+      if (wireAssistant.tool_calls && wireAssistant.tool_calls.length > 0) {
+        pendingCalls.push(...wireAssistant.tool_calls.map(call => call.id))
+      }
       continue
     }
     // user role: tool results ride in user messages in the harness
     // vocabulary, but DeepSeek wants them as role:'tool' messages.
     const toolResults = message.content.filter(block => block.type === 'tool-result')
     const text = flattenText(message.content)
-    if (text.length > 0 || toolResults.length === 0) {
-      wire.push({ role: 'user', content: text })
-    }
-    for (const result of toolResults) {
-      wire.push({
-        role: 'tool',
-        tool_call_id: result.toolCallId,
-        // Empty tool output still needs SOME content on the wire.
-        content: flattenText(result.content) || '(no output)',
-      })
+
+    if (pendingCalls.length > 0) {
+      for (const result of toolResults) {
+        wire.push({
+          role: 'tool',
+          tool_call_id: result.toolCallId,
+          content: flattenText(result.content) || '(no output)',
+        })
+        const index = pendingCalls.indexOf(result.toolCallId)
+        if (index >= 0) pendingCalls.splice(index, 1)
+      }
+      if (text.length > 0) {
+        flushPendingCalls(wire, pendingCalls)
+        wire.push({ role: 'user', content: text })
+      }
+    } else {
+      if (text.length > 0 || toolResults.length === 0) {
+        wire.push({ role: 'user', content: text })
+      }
+      for (const result of toolResults) {
+        wire.push({
+          role: 'tool',
+          tool_call_id: result.toolCallId,
+          // Empty tool output still needs SOME content on the wire.
+          content: flattenText(result.content) || '(no output)',
+        })
+      }
     }
   }
+  flushPendingCalls(wire, pendingCalls)
   return wire
 }
 
@@ -289,6 +331,8 @@ export async function serializeMessagesWithImages(
   assertSupportedImageRoles(messages)
   const wire: WireMessage[] = []
   let pendingToolImages: WireImageContentPart[] = []
+  const pendingCalls: string[] = []
+
   const flushToolImages = (): void => {
     if (pendingToolImages.length === 0) return
     wire.push({
@@ -301,13 +345,19 @@ export async function serializeMessagesWithImages(
   for (const [messageIndex, message] of messages.entries()) {
     const nextImage = { value: 0 }
     if (message.role === 'system') {
+      flushPendingCalls(wire, pendingCalls)
       flushToolImages()
       wire.push({ role: 'system', content: flattenText(message.content) })
       continue
     }
     if (message.role === 'assistant') {
+      flushPendingCalls(wire, pendingCalls)
       flushToolImages()
-      wire.push(serializeAssistant(message))
+      const wireAssistant = serializeAssistant(message)
+      wire.push(wireAssistant)
+      if (wireAssistant.tool_calls && wireAssistant.tool_calls.length > 0) {
+        pendingCalls.push(...wireAssistant.tool_calls.map(call => call.id))
+      }
       continue
     }
 
@@ -316,25 +366,51 @@ export async function serializeMessagesWithImages(
       block.type === 'tool-result'
     ))
     const content = userContent(await contentParts(regular, images, messageIndex + 1, nextImage))
-    if (content.length > 0 || toolResults.length === 0) {
-      flushToolImages()
-      wire.push({
-        role: 'user',
-        content,
-      })
-    }
-    for (const result of toolResults) {
-      const parts = await contentParts(result.content, images, messageIndex + 1, nextImage)
-      const imageParts = parts.filter((part): part is WireImageContentPart => part.type !== 'text')
-      const text = parts.filter(part => part.type === 'text').map(part => part.text).join('')
-      wire.push({
-        role: 'tool',
-        tool_call_id: result.toolCallId,
-        content: text || '(no output)',
-      })
-      pendingToolImages.push(...imageParts)
+
+    if (pendingCalls.length > 0) {
+      for (const result of toolResults) {
+        const parts = await contentParts(result.content, images, messageIndex + 1, nextImage)
+        const imageParts = parts.filter((part): part is WireImageContentPart => part.type !== 'text')
+        const text = parts.filter(part => part.type === 'text').map(part => part.text).join('')
+        wire.push({
+          role: 'tool',
+          tool_call_id: result.toolCallId,
+          content: text || '(no output)',
+        })
+        pendingToolImages.push(...imageParts)
+        const index = pendingCalls.indexOf(result.toolCallId)
+        if (index >= 0) pendingCalls.splice(index, 1)
+      }
+      if (content.length > 0) {
+        flushPendingCalls(wire, pendingCalls)
+        flushToolImages()
+        wire.push({
+          role: 'user',
+          content,
+        })
+      }
+    } else {
+      if (content.length > 0 || toolResults.length === 0) {
+        flushToolImages()
+        wire.push({
+          role: 'user',
+          content,
+        })
+      }
+      for (const result of toolResults) {
+        const parts = await contentParts(result.content, images, messageIndex + 1, nextImage)
+        const imageParts = parts.filter((part): part is WireImageContentPart => part.type !== 'text')
+        const text = parts.filter(part => part.type === 'text').map(part => part.text).join('')
+        wire.push({
+          role: 'tool',
+          tool_call_id: result.toolCallId,
+          content: text || '(no output)',
+        })
+        pendingToolImages.push(...imageParts)
+      }
     }
   }
+  flushPendingCalls(wire, pendingCalls)
   flushToolImages()
   return wire
 }
