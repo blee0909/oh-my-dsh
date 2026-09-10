@@ -6,10 +6,35 @@
 
 /* v8 ignore file -- built-bin acceptance exercises this self-executing dispatch. */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
+import { resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadLayeredEnv } from '@deepseek-ai/dsh-app-boot'
 import { parseDshArgs } from './args.ts'
+
+/**
+ * Check whether the current ESM module is the main process entrypoint.
+ * Compatible with Node.js 24+ (`import.meta.main`), Node.js < 24 (`process.argv[1]`
+ * match with optional symlink resolution), and alternative runtimes (Deno, Bun).
+ * @param metaUrl - The `import.meta.url` of the module being tested.
+ * @param entry - The entry file path, defaults to `process.argv[1]`.
+ */
+export function isMainModule(metaUrl: string, entry: string | undefined = process.argv[1]): boolean {
+  if (import.meta.main) return true
+  if (!entry) return false
+  try {
+    const current = resolvePath(fileURLToPath(metaUrl))
+    const resolvedEntry = resolvePath(entry)
+    if (current === resolvedEntry) return true
+    try {
+      return realpathSync(current) === realpathSync(resolvedEntry)
+    } catch {
+      return false
+    }
+  } catch {
+    return false
+  }
+}
 
 // Both the source tree (apps/cli/src) and the bundled bin (apps/cli/lib) sit
 // one directory under apps/cli, so the checked-in manifest resolves with the
@@ -61,6 +86,6 @@ export async function runCli(): Promise<void> {
   }
 }
 
-if (import.meta.main) {
+if (isMainModule(import.meta.url)) {
   await runCli()
 }
