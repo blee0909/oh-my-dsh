@@ -1,5 +1,5 @@
 import { Context, Service } from '@deepseek-ai/cordis'
-import { Entry, type EntryOptions } from './entry.ts'
+import { Entry, type EntryOptions, type EntryFailurePredicate } from './entry.ts'
 import { EntryTree } from './tree.ts'
 
 /** Runtime owner for a list of child loader entries. */
@@ -7,6 +7,7 @@ export class EntryGroup {
   static readonly key = Symbol.for('cordis.group')
 
   public data: EntryOptions[] = []
+  public tolerateEntryFailures?: boolean | EntryFailurePredicate
 
   constructor(public ctx: Context, public tree: EntryTree) {
     const entry = ctx.fiber.entry
@@ -15,6 +16,10 @@ export class EntryGroup {
 
   get context(): Context {
     return this.ctx
+  }
+
+  get effectiveTolerateEntryFailures(): boolean | EntryFailurePredicate {
+    return this.tolerateEntryFailures ?? this.tree.tolerateEntryFailures ?? false
   }
 
   async create(options: Omit<EntryOptions, 'id'>) {
@@ -73,15 +78,45 @@ export class EntryGroup {
       // the containing tree has gone away, but their failures no longer
       // describe a live update to roll back.
       if (this.ctx.fiber.uid === null) return
-      const failures = outcomes
-        .filter((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected')
-        .map(outcome => outcome.reason)
-      if (failures.length === 1) throw failures[0]
-      if (failures.length > 1) throw new AggregateError(failures, 'loader entries failed to apply')
+      const rejected: { options: EntryOptions; error: unknown }[] = []
+      for (let i = 0; i < outcomes.length; i++) {
+        const outcome = outcomes[i]!
+        if (outcome.status === 'rejected') {
+          rejected.push({ options: config[i]!, error: outcome.reason })
+        }
+      }
+
+      const policy = this.effectiveTolerateEntryFailures
+      const isTolerated = (options: EntryOptions, error: unknown): boolean => {
+        if (typeof policy === 'function') return policy(options, error)
+        return Boolean(policy)
+      }
+
+      const fatalFailures: unknown[] = []
+      for (const { options, error } of rejected) {
+        if (policy && isTolerated(options, error)) {
+          options.disabled = true
+          try {
+            await this.create(options)
+          } catch {
+            // Ignore if creation of disabled placeholder fails
+          }
+          this.context.emit('loader/entry-failed', options, error)
+          if (this.tree.enableLogs) {
+            this.context.logger?.warn?.(`[loader] tolerated entry failure for ${options.id} (${options.name}):`, error)
+          }
+        } else {
+          fatalFailures.push(error)
+        }
+      }
+
+      if (fatalFailures.length === 1) throw fatalFailures[0]
+      if (fatalFailures.length > 1) throw new AggregateError(fatalFailures, 'loader entries failed to apply')
       for (const id of Object.keys(oldMap)) {
         if (!newMap[id]) await this.remove(id, true)
       }
       this.data = config
+
     } catch (error) {
       const rollbackErrors: unknown[] = []
       for (const id of Object.keys(newMap).reverse()) {

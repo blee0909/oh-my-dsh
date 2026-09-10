@@ -24,6 +24,7 @@ declare module '@deepseek-ai/cordis' {
   interface Events {
     'exit'(signal: NodeJS.Signals): Promise<void>
     'loader/config-update'(): void
+    'loader/entry-failed'(options: EntryOptions, error: unknown): void
     'loader/entry-init'(entry: Entry): void
     'loader/partial-dispose'(entry: Entry, legacy: Partial<EntryOptions>, active: boolean): void
     'loader/patch-context'(entry: Entry, next: () => void | Promise<void>): void | Promise<void>
@@ -48,6 +49,8 @@ export namespace Loader {
   export interface Config {
     /** Base URL used to resolve relative plugin specifiers and config paths. */
     baseUrl?: string
+    /** Fault tolerance policy: true to tolerate all failures, or predicate function. */
+    tolerateEntryFailures?: boolean | import('./config/entry.ts').EntryFailurePredicate
   }
 
   /** Intercept config used when other plugins depend on `loader`. */
@@ -78,6 +81,9 @@ export class Loader extends EntryTree {
     super(ctx)
     if (config.baseUrl) {
       this.ctx.baseUrl = config.baseUrl
+    }
+    if (config.tolerateEntryFailures !== undefined) {
+      this.tolerateEntryFailures = config.tolerateEntryFailures
     }
     const self = this
 

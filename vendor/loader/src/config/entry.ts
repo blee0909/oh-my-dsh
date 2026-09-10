@@ -21,6 +21,9 @@ export interface EntryOptions {
   inject?: Inject | null
 }
 
+/** Predicate deciding whether an entry failure should be tolerated without rolling back healthy entries. */
+export type EntryFailurePredicate = (options: EntryOptions, error: unknown) => boolean
+
 function updateError(stage: 'import' | 'dispose' | 'apply' | 'rollback', options: EntryOptions, cause: unknown) {
   const detail = cause instanceof Error ? cause.message : String(cause)
   return new Error(`failed to ${stage} loader entry ${options.id} (${options.name}): ${detail}`, { cause })

@@ -557,6 +557,23 @@ class SafeModeEntryGroup extends EntryGroup {
     private essentials?: ReadonlySet<string>,
   ) {
     super(ctx, tree)
+    this.tolerateEntryFailures = (options) => {
+      if (this.essentials?.has(options.id) || this.essentials?.has(options.name)) return false
+      return true
+    }
+    this.ctx.on('loader/entry-failed', (options, error) => {
+      let deepestCause: unknown = error
+      while (deepestCause instanceof Error && deepestCause.cause !== undefined) {
+        deepestCause = deepestCause.cause
+      }
+      this.quarantine.record({
+        id: options.id,
+        name: options.name,
+        stage: 'activation',
+        error: deepestCause,
+        quarantinedAt: Date.now(),
+      })
+    })
   }
 
   override async update(config: EntryOptions[]): Promise<void> {

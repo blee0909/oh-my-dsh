@@ -1,6 +1,6 @@
 import { composeError, Context } from '@deepseek-ai/cordis'
 import { isNonNullable, type Dict } from '@deepseek-ai/cosmokit'
-import { Entry, type EntryOptions } from './entry.ts'
+import { Entry, type EntryOptions, type EntryFailurePredicate } from './entry.ts'
 import { EntryGroup } from './group.ts'
 
 /** Mutable tree of loader entries. Persistence is supplied by subclasses. */
@@ -9,6 +9,7 @@ export abstract class EntryTree {
 
   public ctx: Context
   public enableLogs?: boolean
+  public tolerateEntryFailures?: boolean | EntryFailurePredicate
   public root: EntryGroup
   public store: Dict<Entry> = Object.create(null)
 
@@ -50,14 +51,33 @@ export abstract class EntryTree {
         await Promise.allSettled(tasks)
         continue
       }
+      const entries = [...this.entries()]
       const outcomes = await Promise.allSettled(
-        [...this.entries()].map(entry => entry._await()),
+        entries.map(entry => entry._await()),
       )
-      const failures = outcomes
-        .filter((outcome): outcome is PromiseRejectedResult => outcome.status === 'rejected')
-        .map(outcome => outcome.reason)
-      if (failures.length === 1) throw failures[0]
-      if (failures.length > 1) throw new AggregateError(failures, 'loader fibers failed')
+      const rejected: { entry: Entry; reason: unknown }[] = []
+      for (let i = 0; i < outcomes.length; i++) {
+        const outcome = outcomes[i]!
+        if (outcome.status === 'rejected') {
+          rejected.push({ entry: entries[i]!, reason: outcome.reason })
+        }
+      }
+      const policy = this.tolerateEntryFailures
+      const fatalFailures: unknown[] = []
+      for (const { entry, reason } of rejected) {
+        const entryPolicy = entry.parent?.effectiveTolerateEntryFailures || policy
+        const isTolerated = typeof entryPolicy === 'function' ? entryPolicy(entry.options, reason) : Boolean(entryPolicy)
+        if (entryPolicy && isTolerated) {
+          this.ctx.emit('loader/entry-failed', entry.options, reason)
+          if (this.enableLogs) {
+            this.ctx.logger?.warn?.(`[loader] tolerated entry await failure for ${entry.options.id} (${entry.options.name}):`, reason)
+          }
+        } else {
+          fatalFailures.push(reason)
+        }
+      }
+      if (fatalFailures.length === 1) throw fatalFailures[0]
+      if (fatalFailures.length > 1) throw new AggregateError(fatalFailures, 'loader fibers failed')
       this.ctx.reflect.notify(['loader'])
       if (!this.getTasks().length) return
     }

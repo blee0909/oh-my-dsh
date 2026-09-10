@@ -167,6 +167,8 @@ export namespace Include {
     patches?: PatchOptions[]
     /** Enables loader apply/reload/unload logs for this subtree. */
     enableLogs?: boolean
+    /** Fault tolerance policy: true to tolerate all failures, or predicate function. */
+    tolerateEntryFailures?: boolean | import('@deepseek-ai/cordis-plugin-loader').EntryFailurePredicate
   }
 }
 
@@ -194,6 +196,10 @@ export class Include extends EntryTree {
   constructor(ctx: Context, public config: Include.Config) {
     super(ctx)
     this.enableLogs = config.enableLogs ?? ctx.fiber.entry?.parent.tree.enableLogs ?? false
+    if (config.tolerateEntryFailures !== undefined) {
+      this.tolerateEntryFailures = config.tolerateEntryFailures
+      this.root.tolerateEntryFailures = config.tolerateEntryFailures
+    }
     this.filename = fileURLToPath(new URL(this.config.path, this.ctx.baseUrl))
     const ext = extname(this.filename)
     if (!supported.has(ext)) {
