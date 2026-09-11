@@ -91,6 +91,24 @@ describe('Remote stream mux server carrier lifecycle', () => {
     }
   })
 
+  it('resets missed heartbeats when receiving client messages without pong', async () => {
+    const entry = await startMux(async (_endpoint, _payload, signal) => waitForAbort(signal), 20)
+    const client = await connect(entry.url, false)
+    const serverSocket = acceptedSocket(entry.mux)
+    const terminated = vi.spyOn(serverSocket, 'terminate')
+
+    await once(client, 'ping')
+    client.send(JSON.stringify({ type: 'cancel', streamId: 'nonexistent' }))
+    await once(client, 'ping')
+    client.send(JSON.stringify({ type: 'cancel', streamId: 'nonexistent' }))
+    await once(client, 'ping')
+    expect(terminated).not.toHaveBeenCalled()
+
+    const closed = once(client, 'close')
+    client.close()
+    await closed
+  })
+
   it('rejects binary, malformed, and duplicate logical-stream messages', async () => {
     const entry = await startMux(async (_endpoint, _payload, signal) => waitForAbort(signal))
 

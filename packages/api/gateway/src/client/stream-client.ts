@@ -195,6 +195,9 @@ export class RemoteStreamMuxClient {
     if (this.socket?.readyState === WebSocket.OPEN) return Promise.resolve(this.socket)
     if (this.disposed) return Promise.reject(new Error('api gateway: Remote stream client disposed'))
     if (!this.running) return Promise.reject(new Error('api gateway: Remote stream client not started'))
+    if (this.keepAlive === undefined) {
+      this.maintain()
+    }
     return new Promise((resolve, reject) => {
       const aborted = (): void => { waiter.reject(signal.reason) }
       const cleanup = (): void => {

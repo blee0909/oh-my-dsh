@@ -2532,6 +2532,40 @@ describe('Remote stream client carrier lifecycle', () => {
     })
   })
 
+  it('automatically reconnects the physical carrier when a logical stream requests one after socket loss', async () => {
+    await withFakeWebSocket('https://harness.example', async () => {
+      FakeWebSocket.autoOpen = false
+      const client = new RemoteStreamMuxClient()
+      client.start()
+      const socket1 = FakeWebSocket.sockets[0]!
+      socket1.open()
+
+      const stream1 = client.open('feed/follow', { label: 'first' }, new AbortController().signal)[Symbol.asyncIterator]()
+      const stream1Pending = stream1.next()
+      await vi.waitFor(() => { expect(socket1.sent).toHaveLength(1) })
+      const open1 = JSON.parse(socket1.sent[0]!) as { streamId: string }
+      socket1.receive({ type: 'end', streamId: open1.streamId })
+      await expect(stream1Pending).resolves.toEqual({ done: true, value: undefined })
+
+      socket1.drop()
+      await Promise.resolve()
+
+      const stream2 = client.open('feed/follow', { label: 'second' }, new AbortController().signal)[Symbol.asyncIterator]()
+      const stream2Pending = stream2.next()
+
+      await vi.waitFor(() => { expect(FakeWebSocket.sockets).toHaveLength(2) })
+      const socket2 = FakeWebSocket.sockets[1]!
+      socket2.open()
+
+      await vi.waitFor(() => { expect(socket2.sent).toHaveLength(1) })
+      const open2 = JSON.parse(socket2.sent[0]!) as { streamId: string }
+      socket2.receive({ type: 'item', streamId: open2.streamId, value: 'reconnected' })
+      await expect(stream2Pending).resolves.toEqual({ done: false, value: 'reconnected' })
+
+      await client.close()
+    })
+  })
+
   it('fails active streams on an invalid frame and ignores later frames', async () => {
     await withFakeWebSocket('https://harness.example', async () => {
       const client = new RemoteStreamMuxClient()

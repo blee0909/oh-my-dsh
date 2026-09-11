@@ -19,7 +19,7 @@ export type RemoteStreamOpener = (
 /** Convert an invocation or carrier failure to a stable wire value. */
 export type RemoteStreamFailureMapper = (error: unknown) => RemoteStreamFailure
 
-const MAX_MISSED_HEARTBEATS = 2
+export const DEFAULT_MAX_MISSED_HEARTBEATS = 2
 
 /** Own the no-server WebSocket acceptor and every active logical stream. */
 export class RemoteStreamMuxServer {
@@ -32,11 +32,13 @@ export class RemoteStreamMuxServer {
    * @param open - Gateway stream dispatcher.
    * @param failure - Gateway error-to-wire mapper.
    * @param heartbeatIntervalMs - interval between WebSocket Ping control frames.
+   * @param maxMissedHeartbeats - number of consecutive missed heartbeats before terminating.
    */
   constructor(
     private readonly open: RemoteStreamOpener,
     private readonly failure: RemoteStreamFailureMapper,
     private readonly heartbeatIntervalMs: number,
+    private readonly maxMissedHeartbeats: number = DEFAULT_MAX_MISSED_HEARTBEATS,
   ) {}
 
   /**
@@ -49,6 +51,7 @@ export class RemoteStreamMuxServer {
     this.server.handleUpgrade(req, socket, head, (websocket) => {
       this.missedHeartbeats.set(websocket, 0)
       websocket.on('pong', () => { this.missedHeartbeats.set(websocket, 0) })
+      websocket.on('message', () => { this.missedHeartbeats.set(websocket, 0) })
       this.startHeartbeat()
       const connection = new RemoteStreamMuxConnection(websocket, this.open, this.failure)
       const done = connection.run()
@@ -78,9 +81,9 @@ export class RemoteStreamMuxServer {
       for (const socket of this.server.clients) {
         if (socket.readyState !== WebSocket.OPEN) continue
         const missed = this.missedHeartbeats.get(socket) as number
-        if (missed >= MAX_MISSED_HEARTBEATS) {
+        if (missed >= this.maxMissedHeartbeats) {
           setImmediate(() => {
-            if ((this.missedHeartbeats.get(socket) as number) >= MAX_MISSED_HEARTBEATS) {
+            if ((this.missedHeartbeats.get(socket) as number) >= this.maxMissedHeartbeats) {
               socket.terminate()
             }
           })
