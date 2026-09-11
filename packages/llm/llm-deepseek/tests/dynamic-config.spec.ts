@@ -307,4 +307,25 @@ describe('request-level dynamic configuration', () => {
     expect(serverA.requests).toHaveLength(1)
     expect(serverA.headers[0]?.authorization).toBe('Bearer steady-key')
   })
+
+  it('updates models without specifying thinking or reasoningEffort without configuration rollback (#5761)', async () => {
+    const dir = await home()
+    const server = await mockServer([{ kind: 'sse', events: textEvents }])
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    const { ctx } = await boot(dir, { baseURL: server.url })
+
+    // Partial update with models only, omitting thinking and reasoningEffort
+    await ctx.settings.update(NS, {
+      models: [{ id: 'deepseek-v4-custom', name: 'Custom V4' }],
+    })
+
+    const models = await ctx.llm.listModels('deepseek-official')
+    expect(models).toEqual([
+      { provider: 'deepseek-official', id: 'deepseek-v4-custom', name: 'Custom V4', inputModalities: ['text'] },
+    ])
+
+    // Verify requests still route to baseURL properly
+    await prompt(ctx)
+    expect(server.requests).toHaveLength(1)
+  })
 })

@@ -6,7 +6,7 @@
 # toolset, a skill that teaches composition authoring, and a persona that says
 # which of the two planes an edit belongs to.
 #
-# TRUST: `cordis_mount` evaluates model-written JavaScript against the live
+# TRUST: `cordis_define` / `cordis_run` evaluate model-written JavaScript against the live
 # runtime, and a composition this agent writes becomes a preset other sessions
 # mount. Treat a session on this preset as shell access — the toolset's own
 # documentation makes the same statement.

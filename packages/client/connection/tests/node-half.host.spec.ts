@@ -16,7 +16,8 @@ import { provideBrowserCredentials } from './browser-credentials.ts'
 function fakeHttpServer(
   routes: WebRoute[],
   upgrades: WebUpgradeRoute[],
-): Pick<WebServer, 'register' | 'registerUpgrade' | 'tapIndex' | 'port'> {
+  authenticatorHolder?: { current?: ((req: IncomingMessage) => unknown) | undefined },
+): Pick<WebServer, 'register' | 'registerUpgrade' | 'tapIndex' | 'port' | 'setAuthenticator'> {
   return {
     register(route) {
       if (routes.some(candidate => candidate.kind === route.kind && candidate.path === route.path)) {
@@ -28,6 +29,10 @@ function fakeHttpServer(
     registerUpgrade(route) {
       upgrades.push(route)
       return () => { upgrades.splice(upgrades.indexOf(route), 1) }
+    },
+    setAuthenticator(authenticator) {
+      if (authenticatorHolder) authenticatorHolder.current = authenticator
+      return () => { if (authenticatorHolder) authenticatorHolder.current = undefined }
     },
     tapIndex: () => () => {},
     port: 0,
@@ -81,7 +86,10 @@ function fakeResponse(): {
   return { response, state }
 }
 
-async function mounted(config?: ConnectionConfig): Promise<{
+async function mounted(
+  config?: ConnectionConfig,
+  authenticatorHolder?: { current?: (req: IncomingMessage) => unknown },
+): Promise<{
   ctx: Context
   routes: WebRoute[]
   upgrades: WebUpgradeRoute[]
@@ -92,7 +100,7 @@ async function mounted(config?: ConnectionConfig): Promise<{
   const routes: WebRoute[] = []
   const upgrades: WebUpgradeRoute[] = []
   provideBrowserCredentials(ctx)
-  ctx.provide('webServer', fakeHttpServer(routes, upgrades) as WebServer)
+  ctx.provide('webServer', fakeHttpServer(routes, upgrades, authenticatorHolder) as WebServer)
   const fiber = ctx.plugin({ inject: [...inject], apply }, config)
   await fiber.await()
   return {
@@ -265,7 +273,8 @@ describe('connection node half', () => {
   })
 
   it('shares its configured trust and authentication policy with sibling routes', async () => {
-    const { connection, dispose } = await mounted({ trustedHosts: ['harness.example'] })
+    const authHolder: { current?: (req: IncomingMessage) => unknown } = {}
+    const { connection, dispose } = await mounted({ trustedHosts: ['harness.example'] }, authHolder)
     const loopback = fakeRequest({ host: '127.0.0.1:3080' })
     const declared = fakeRequest({ host: 'harness.example' })
 
@@ -275,7 +284,18 @@ describe('connection node half', () => {
       host: 'harness.example',
       cookie: browserCookie(connection, 'harness.example'),
     }))).toBeUndefined()
+
+    // WebServer global authenticator protects sibling routes with the same rejection policy (#5770)
+    expect(authHolder.current).toBeDefined()
+    expect(authHolder.current!(loopback)).toBe(401)
+    expect(authHolder.current!(declared)).toBe(401)
+    expect(authHolder.current!(fakeRequest({
+      host: 'harness.example',
+      cookie: browserCookie(connection, 'harness.example'),
+    }))).toBeUndefined()
+
     await dispose()
+    expect(authHolder.current).toBeUndefined()
   })
 
   it('provides a disposable dedicated RPC channel', async () => {

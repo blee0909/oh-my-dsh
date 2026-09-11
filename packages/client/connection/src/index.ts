@@ -135,6 +135,9 @@ export async function apply(ctx: Context, config?: ConnectionConfig): Promise<vo
         await bridge(req, res, fetchHandler, maxRequestBodyBytes)
       },
     }
+    if (typeof webCtx.webServer.setAuthenticator === 'function') {
+      webCtx.effect(() => webCtx.webServer.setAuthenticator(req => connection.requestRejection(req)), 'client-connection: webserver authenticator')
+    }
     webCtx.effect(() => webCtx.webServer.register(route), 'client-connection: /api route')
   })
   ctx.inject(['attachments'], (attachmentCtx) => {

@@ -29,9 +29,9 @@ Locally authored presets live one directory per preset under `${DSH_HOME:-$HOME/
 
 ## The roster service
 
-`ctx.agentPresets` owns discovery, authoring, and mounting. You reach it by mounting a temporary plugin that injects it and registers a tool for yourself — `cordis_mount` returns only the mount acknowledgement, so a registered tool is how a service answer gets back to you, and it becomes callable on your next step.
+`ctx.agentPresets` owns discovery, authoring, and mounting. You reach it by defining and running a temporary dynamic plugin with `cordis_define` (kind: "new") and `cordis_run` (mode: "run") that injects it and registers a tool for yourself — the tool execution returns the service result, and it becomes callable on your next step.
 
-Read `cordis_inspect what:"api" name:"agentPresets"` for the current signatures before writing the code. What this skill relies on:
+Read `cordis_inspect_list` and `cordis_inspect_query` for current signatures before writing the code. What this skill relies on:
 
 - `list()` — every preset with its `id`, `trust` (`system` for the shipped set, `user` for authored ones), and the absolute `path` of its composition file. This is how you locate any composition without knowing the install layout; the directory is that path's parent.
 - `read(id)` — one preset's composition text, without a file tool or a path.
@@ -61,7 +61,7 @@ return {
 }
 ```
 
-Unmount the plugin with `cordis_unmount` when you are done; it is a probe, not a capability to leave behind.
+Stop the dynamic plugin with `cordis_stop` when you are done; it is a probe, not a capability to leave behind.
 
 ## Authoring a preset
 
@@ -77,7 +77,7 @@ A composition written from scratch usually forgets a group realm or a consumer r
 
 **A row that publishes a service may not sit loose in a preset.** Registering a service without an isolate realm puts it in the process-global realm, so the second session mounting that preset collides with the first. The mount rejects it rather than letting the collision surface later.
 
-Whether a row publishes a service is not visible from its name, and package READMEs are absent from an installed deployment. Read it off the live runtime instead: `cordis_inspect what:"services"` lists every service with the fiber that owns it, so a service attributed to a fiber other than the row you are adding is one that row consumes rather than provides. For a row not in your current composition, mount-validate and read the rejection — it names the offending service.
+Whether a row publishes a service is not visible from its name, and package READMEs are absent from an installed deployment. Read it off the live runtime instead: `cordis_inspect_query` (or `cordis_inspect_list`) lists services and declared capabilities with the providers that own them, so a service attributed to a provider other than the row you are adding is one that row consumes rather than provides. For a row not in your current composition, mount-validate and read the rejection — it names the offending service.
 
 When a preset genuinely owns a service, wrap the provider **and every consumer that reaches it** in one group carrying an `isolate` realm. The shipped `standard` composition does this for `workflows`, which nothing outside an agent reads — its `delegation` group, with the delegation tools omitted here:
 
@@ -115,11 +115,11 @@ It returns normally when the composition mounts. Run it as the final check on a 
 
 **Do not treat the roster's `broken` field as validation.** `list()` reports `broken` from a shape check — the file parses in the loader's YAML dialect and holds named rows — which every failure above passes. It catches a damaged file, not an unusable composition.
 
-`cordis_inspect` reports THIS session's composition, so it confirms what a row does in the runtime you are already in, never what your new preset will do.
+`cordis_inspect_query` reports THIS session's composition, so it confirms what a row does in the runtime you are already in, never what your new preset will do.
 
 After a clean mount-validation, ask the user to start a session on the new preset and confirm the tool list; the preset decides tool schemas and prompt sections, and only a real session shows the agent that composition produces.
 
-`cordis_mount` evaluates JavaScript against the live runtime and disappears on restart. It is for probing, not for shipping a capability: a capability belongs in a composition file.
+`cordis_define` / `cordis_run` evaluate JavaScript against the live runtime and disappear on restart. They are for probing, not for shipping a capability: a capability belongs in a composition file.
 
 ## Native product subagents
 

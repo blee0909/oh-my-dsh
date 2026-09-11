@@ -208,6 +208,45 @@ function drivePublishedRun(
   }
 }
 
+/** Format a diagnostic string for non-completed in-process run outcomes. */
+function inProcessDiagnostic(
+  stopReason: SubagentStopReason,
+  reason: TurnEndReason | undefined,
+  structuredMissing?: boolean,
+): string | undefined {
+  if (structuredMissing) {
+    return 'Subagent failure (provider: in-process; stage: structured-capture; category: missing-output; cause: child completed without providing required structured output)'
+  }
+  if (stopReason === 'error') {
+    if (reason?.kind === 'error') {
+      const message = reason.error?.message
+      const code = reason.error?.code
+      const cause = message
+        ? (code && code !== 'UNKNOWN' ? `${message} [${code}]` : message)
+        : undefined
+      const fields = ['provider: in-process', 'stage: session-run', 'category: child-error']
+      if (cause !== undefined && cause.length > 0) {
+        const truncatedCause = cause.length > 2048 ? `${cause.slice(0, 2045)}...` : cause
+        fields.push(`cause: ${truncatedCause}`)
+      }
+      return `Subagent failure (${fields.join('; ')})`
+    }
+    if (reason?.kind === 'interrupted') {
+      return 'Subagent failure (provider: in-process; stage: session-run; category: child-interrupted)'
+    }
+    if (reason === undefined) {
+      return 'Subagent failure (provider: in-process; stage: session-run; category: missing-terminal)'
+    }
+    return 'Subagent failure (provider: in-process; stage: session-run; category: child-unknown)'
+  }
+  if (stopReason === 'aborted') {
+    if (reason?.kind === 'aborted' && reason.reason.kind === 'disposed') {
+      return 'Subagent failure (provider: in-process; stage: session-run; category: child-disposed)'
+    }
+  }
+  return undefined
+}
+
 /** Read one settled child's result from events after its activation boundary. */
 function readResult(
   child: Agent,
@@ -215,7 +254,6 @@ function readResult(
   cancelled: boolean,
   structured?: { captured?: { value: unknown } | undefined },
 ): SubagentResult {
-  // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
   const own = child.session.snapshotEvents(boundary)
   // `droppedUnrun` is deliberately unread: a one-shot prompt is claimed by its
   // awaited first turn almost immediately, and the owner's own teardown is the
@@ -230,9 +268,28 @@ function readResult(
   const stopReason: SubagentStopReason = cancelled && recorded !== 'completed' ? 'aborted' : recorded
   if (structured !== undefined) {
     if (structured.captured !== undefined) {
-      return { output, structured: structured.captured.value, stopReason }
+      const diagnostic = inProcessDiagnostic(stopReason, lastEnd?.data.reason)
+      return {
+        output,
+        structured: structured.captured.value,
+        stopReason,
+        ...diagnostic !== undefined ? { diagnostic } : {},
+      }
     }
-    if (stopReason === 'completed') return { output, stopReason: cancelled ? 'aborted' : 'error' }
+    if (stopReason === 'completed') {
+      const finalStopReason: SubagentStopReason = cancelled ? 'aborted' : 'error'
+      const diagnostic = inProcessDiagnostic(finalStopReason, lastEnd?.data.reason, !cancelled)
+      return {
+        output,
+        stopReason: finalStopReason,
+        ...diagnostic !== undefined ? { diagnostic } : {},
+      }
+    }
   }
-  return { output, stopReason }
+  const diagnostic = inProcessDiagnostic(stopReason, lastEnd?.data.reason)
+  return {
+    output,
+    stopReason,
+    ...diagnostic !== undefined ? { diagnostic } : {},
+  }
 }

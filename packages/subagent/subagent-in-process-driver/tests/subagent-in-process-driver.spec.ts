@@ -342,7 +342,21 @@ describe('startInProcessRun', () => {
     const run = await startInProcessRun(request(parent), {})
     const child = ctx.agents.get(run.id)!
     expect(child.options).toEqual({ subagentDepth: 1 })
-    await expect(run.result).resolves.toMatchObject({ stopReason: 'error' })
+    const res = await run.result
+    expect(res).toMatchObject({ stopReason: 'error' })
+    expect(res.diagnostic).toContain('Subagent failure (provider: in-process; stage: session-run; category: child-error')
+    expect(res.diagnostic).toContain('cause:')
+    await run.dispose()
+  })
+
+  it('propagates structured failure diagnostic with transparent cause on child turn error', async () => {
+    const { parent } = await setup([() => { throw new Error('scripted mock error') }])
+    const run = await startInProcessRun(request(parent), {})
+    const result = await run.result
+    expect(result.stopReason).toBe('error')
+    expect(result.diagnostic).toBeDefined()
+    expect(result.diagnostic).toContain('Subagent failure (provider: in-process; stage: session-run; category: child-error')
+    expect(result.diagnostic).toContain('cause: scripted mock error')
     await run.dispose()
   })
 

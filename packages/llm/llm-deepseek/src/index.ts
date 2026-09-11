@@ -184,9 +184,15 @@ const catalogModel: z<DeepSeekCatalogModel> = z.object({
   systemPromptUpdate: z.const('in-history'),
 })
 
+/** Public API default; the internal endpoint comes from $DEEPSEEK_BASE_URL. */
+export const PUBLIC_BASE_URL = 'https://api.deepseek.com'
+
+/** Environment variable naming this provider's endpoint, honored only from trusted layers. */
+const BASE_URL_ENV = 'DEEPSEEK_BASE_URL'
+
 export const Config: z<Config> = z.object({
   apiKeyEnv: z.string().role('credential-ref').default(DEFAULT_API_KEY_ENV),
-  baseURL: z.string(),
+  baseURL: z.string().default(PUBLIC_BASE_URL),
   thinking: z.union(['enabled', 'disabled']),
   reasoningEffort: z.union(['off', 'low', 'high', 'max']),
   maxTokens: z.number().step(1).min(1).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_MAX_TOKENS),
@@ -205,12 +211,6 @@ export const Config: z<Config> = z.object({
   fileQuotaCleanupBatch: z.number().step(1).min(1).max(1_000).default(DEFAULT_FILE_QUOTA_CLEANUP_BATCH),
   retryPolicy: RetryPolicySchema,
 })
-
-/** Public API default; the internal endpoint comes from $DEEPSEEK_BASE_URL. */
-export const PUBLIC_BASE_URL = 'https://api.deepseek.com'
-
-/** Environment variable naming this provider's endpoint, honored only from trusted layers. */
-const BASE_URL_ENV = 'DEEPSEEK_BASE_URL'
 
 /**
  * One resolution's complete request facts. Connection and credential facts
@@ -391,9 +391,9 @@ export function resolveAdapterOptions(config: Config, environment?: LaunchEnviro
   }
   return {
     apiKeyEnv: credentialRef(config.apiKeyEnv ?? DEFAULT_API_KEY_ENV),
-    baseURL: config.baseURL
-      ?? environment?.get(BASE_URL_ENV)?.value
-      ?? PUBLIC_BASE_URL,
+    baseURL: (config.baseURL && config.baseURL !== PUBLIC_BASE_URL)
+      ? config.baseURL
+      : (environment?.get(BASE_URL_ENV)?.value ?? config.baseURL ?? PUBLIC_BASE_URL),
     defaults: {
       thinking: config.thinking,
       reasoningEffort: config.reasoningEffort,
