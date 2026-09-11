@@ -84,3 +84,13 @@ describe('parseCodexConfig', () => {
     })
   })
 })
+
+describe('blocksToText defensive handling (#5446)', () => {
+  it('safely handles undefined, null, and empty content without throwing', async () => {
+    const { blocksToText } = await import('@deepseek-ai/dsh-hooks-codex/src/index.ts')
+    expect(blocksToText(undefined)).toBe('')
+    expect(blocksToText(null)).toBe('')
+    expect(blocksToText([])).toBe('')
+    expect(blocksToText([{ type: 'text', text: 'hello ' }, { type: 'text', text: 'world' }])).toBe('hello world')
+  })
+})

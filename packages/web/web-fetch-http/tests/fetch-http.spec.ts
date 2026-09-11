@@ -121,6 +121,18 @@ describe('public-network policy', () => {
     }
   })
 
+  it('accepts RFC 2544 / RFC 5735 fake-ip destinations for transparent proxy TUN compatibility (#5459)', async () => {
+    expect(isPublicIpAddress('198.18.0.1')).toBe(true)
+    expect(isPublicIpAddress('198.19.255.254')).toBe(true)
+    expect(isPublicIpAddress('::ffff:198.18.0.1')).toBe(true)
+
+    const resolver = vi.fn(async () => [
+      { address: '198.18.0.1', family: 4 },
+    ])
+    await expect(resolvePublicAddresses('proxied.example.com', new AbortController().signal, resolver))
+      .resolves.toEqual([{ address: '198.18.0.1', family: 4 }])
+  })
+
   it('retains one fully public DNS answer set', async () => {
     const resolver = vi.fn(async () => [
       { address: '8.8.4.4', family: 4 },

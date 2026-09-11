@@ -44,12 +44,23 @@ interface Nat64Prefix {
 }
 
 /**
- * Return whether an address is globally reachable unicast. IPv4-mapped IPv6 is
+ * RFC 2544 / RFC 5735 benchmark prefix (198.18.0.0/15), the standard fake-ip
+ * pool used by transparent proxy DNS (Surge, Clash TUN, Sing-box).
+ */
+export const FAKE_IP_CIDR = ipaddr.parseCIDR('198.18.0.0/15')
+
+function isAllowedIpv4(ipv4: ipaddr.IPv4): boolean {
+  return ipv4.range() === 'unicast' || ipv4.match(FAKE_IP_CIDR)
+}
+
+/**
+ * Return whether an address is globally reachable unicast or an RFC 2544/5735
+ * benchmark/fake-ip address used by transparent local proxies. IPv4-mapped IPv6 is
  * classified by its embedded IPv4 address; transition and translation prefixes
  * remain blocked because their eventual IPv4 destination cannot be pinned here.
  *
  * @param input - textual IPv4 or IPv6 address.
- * @returns true only for a public unicast destination.
+ * @returns true only for a public unicast or proxy fake-ip destination.
  */
 export function isPublicIpAddress(input: string): boolean {
   let parsed: ipaddr.IPv4 | ipaddr.IPv6
@@ -58,8 +69,8 @@ export function isPublicIpAddress(input: string): boolean {
   } catch {
     return false
   }
-  if (parsed instanceof ipaddr.IPv4) return parsed.range() === 'unicast'
-  if (parsed.isIPv4MappedAddress()) return parsed.toIPv4Address().range() === 'unicast'
+  if (parsed instanceof ipaddr.IPv4) return isAllowedIpv4(parsed)
+  if (parsed.isIPv4MappedAddress()) return isAllowedIpv4(parsed.toIPv4Address())
   return parsed.range() === 'unicast'
 }
 
