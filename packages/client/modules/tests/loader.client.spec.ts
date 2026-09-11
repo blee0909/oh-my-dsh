@@ -563,3 +563,75 @@ describe('default transport seam', () => {
     expect([...document.querySelectorAll('script')]).toEqual([])
   })
 })
+
+describe('bundle revision & cache-busting auto-recovery', () => {
+  it('falls back to single-plugin bundle URL when initial batch bundle fails to load', async () => {
+    const fetched: string[] = []
+    const target = registrationTarget()
+    win.__ModuleLoader__ = target
+    const loadBundle = async (url: string): Promise<void> => {
+      fetched.push(url)
+      if (url === APPLICATION_URL) {
+        throw new Error('network failure for combo batch')
+      }
+      if (url === comboUrl(['a'], '0')) {
+        win.__ModuleLoader__?.load({ id: 'a', factory: () => ({ marker: 'recovered-from-single' }) })
+      }
+    }
+    const loader = target.create({
+      boot: {
+        rev: 'graph',
+        entries: [{ id: 'a', url: comboUrl(['a'], '0'), rev: '0' }],
+        batches: [{ phase: 'application', url: APPLICATION_URL, rev: 'app', entries: ['a'] }],
+      },
+      staticModules: {},
+      loadBundle,
+    })
+    const exports = await loader.import('a')
+    expect((exports as { marker: string }).marker).toBe('recovered-from-single')
+    expect(fetched).toEqual([APPLICATION_URL, comboUrl(['a'], '0')])
+  })
+
+  it('retries with cache-busting query parameter when single bundle initially fails', async () => {
+    const fetched: string[] = []
+    const target = registrationTarget()
+    win.__ModuleLoader__ = target
+    const singleUrl = comboUrl(['a'], '0')
+    const loadBundle = async (url: string): Promise<void> => {
+      fetched.push(url)
+      if (url === singleUrl) {
+        throw new Error('stale 404 in browser cache')
+      }
+      if (url.startsWith(singleUrl) && url.includes('_ts=')) {
+        win.__ModuleLoader__?.load({ id: 'a', factory: () => ({ marker: 'recovered-cache-busted' }) })
+      }
+    }
+    const loader = target.create({
+      boot: {
+        rev: 'graph',
+        entries: [{ id: 'a', url: singleUrl, rev: '0' }],
+        batches: [{ phase: 'application', url: singleUrl, rev: '0', entries: ['a'] }],
+      },
+      staticModules: {},
+      loadBundle,
+    })
+    const exports = await loader.import('a')
+    expect((exports as { marker: string }).marker).toBe('recovered-cache-busted')
+    expect(fetched.length).toBe(2)
+    expect(fetched[0]).toBe(singleUrl)
+    expect(fetched[1]).toMatch(new RegExp(`^${singleUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}&_ts=\\d+$`))
+  })
+
+  it('updates the tracked revision on the graph row when invalidating with a new rev', async () => {
+    let generation = 0
+    const b = bench([row('a')], { a: () => ({ gen: ++generation }) })
+    await b.loader.import('a', '', {})
+    b.loader.invalidate('a', 'v2')
+    await b.loader.prefetch('a')
+    expect(b.fetched.at(-1)).toBe(comboUrl(['a'], 'v2'))
+
+    b.loader.invalidate('a')
+    await b.loader.prefetch('a')
+    expect(b.fetched.at(-1)).toBe(comboUrl(['a'], 'v2'))
+  })
+})

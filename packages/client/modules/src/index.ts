@@ -979,17 +979,40 @@ export class ClientModuleRegistry extends Service {
     if (method !== 'GET' && method !== 'HEAD') return { status: 405 }
     const requestUrl = new URL(url, 'http://x')
     const resourceUrl = `${requestUrl.pathname}${requestUrl.search}`
-    const response = this.responses.get(resourceUrl) ?? this.previousBatchResponses.get(resourceUrl)
+    let response = this.responses.get(resourceUrl) ?? this.previousBatchResponses.get(resourceUrl)
+    let isBusted = false
+    if (response === undefined) {
+      const canonical = this.canonicalResourceUrl(requestUrl)
+      if (canonical !== undefined) {
+        response = this.responses.get(canonical) ?? this.previousBatchResponses.get(canonical)
+        if (response !== undefined) isBusted = true
+      }
+    }
     if (response !== undefined) {
       return {
         status: 200,
-        headers: { 'content-type': response.contentType, 'cache-control': IMMUTABLE_CACHE },
+        headers: {
+          'content-type': response.contentType,
+          'cache-control': isBusted ? 'no-cache, must-revalidate' : IMMUTABLE_CACHE,
+        },
         ...(method === 'HEAD' ? {} : { body: response.body }),
       }
     }
     // Anything else under /plugins (including unadvertised combinations and
     // /plugins/events when the HMR row is absent) is an unknown resource.
     return { status: 404 }
+  }
+
+  private canonicalResourceUrl(requestUrl: URL): string | undefined {
+    if (!requestUrl.search.startsWith('??')) return undefined
+    const query = requestUrl.search.slice(2)
+    const parts = query.split('&')
+    const resources = parts[0]
+    if (resources === undefined) return undefined
+    const revPart = parts.slice(1).find(p => p.startsWith('rev='))
+    if (revPart === undefined) return undefined
+    const canonical = `${requestUrl.pathname}??${resources}&${revPart}`
+    return canonical === `${requestUrl.pathname}${requestUrl.search}` ? undefined : canonical
   }
 
   private readonly serveBundle = (req: IncomingMessage, res: ServerResponse): void => {

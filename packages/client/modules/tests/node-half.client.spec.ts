@@ -649,6 +649,10 @@ describe('client bundle activation', () => {
       }],
     })
     expect((await routeRequest(route, `${row.url}&stale=1`.replace(`rev=${row.rev}`, 'rev=stale'))).status).toBe(404)
+    const cacheBusted = await routeRequest(route, `${row.url}&_ts=1726000000`)
+    expect(cacheBusted.status).toBe(200)
+    expect(cacheBusted.headers?.['cache-control']).toBe('no-cache, must-revalidate')
+    expect(cacheBusted.body.toString('utf8')).toContain(`sourceMappingURL=${mapUrl(row.url)}`)
 
     writeFileSync(`${clientPath}.map`, '{"version":3,"names":[],"mappings":"AAAA","sources":["src/changed.tsx"]}\n')
     const nextRev = service.rebuilt(packageName)

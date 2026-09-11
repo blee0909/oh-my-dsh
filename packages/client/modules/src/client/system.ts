@@ -120,11 +120,38 @@ export class ClientModuleSystem implements ClientModuleLoader {
   }
 
   /** Load one graph row so its factory is registered (idempotent per in-flight arrival). */
-  private arrive(row: BootModuleRow): Promise<void> {
+  private async arrive(row: BootModuleRow): Promise<void> {
     const { id } = row
-    if (this.loadCache.has(id) || this.factories.has(id)) return Promise.resolve()
+    if (this.loadCache.has(id) || this.factories.has(id)) return
     const reloadUrl = this.reloadUrls.get(id)
     const url = reloadUrl ?? row.initialUrl
+
+    try {
+      await this.arriveUrl(url, id)
+    } catch (primaryError) {
+      // Recovery 1: If batch bundle failed to load or register, fallback to single plugin URL
+      if (url === row.initialUrl && row.url !== row.initialUrl) {
+        try {
+          await this.arriveUrl(row.url, id)
+          return
+        } catch {
+          // Fall through to cache-busting recovery
+        }
+      }
+
+      // Recovery 2: Cache-busting retry to bypass stale/corrupted HTTP or browser cache
+      const sep = row.url.includes('?') ? '&' : '?'
+      const cacheBustUrl = `${row.url}${sep}_ts=${Date.now()}`
+      try {
+        await this.arriveUrl(cacheBustUrl, id)
+        return
+      } catch {
+        throw primaryError
+      }
+    }
+  }
+
+  private arriveUrl(url: string, id: string): Promise<void> {
     let transport = this.pendingArrival.get(url)
     if (transport === undefined) {
       transport = this.loadBundle(url).finally(() => { this.pendingArrival.delete(url) })
@@ -134,7 +161,8 @@ export class ClientModuleSystem implements ClientModuleLoader {
       if (!this.factories.has(id)) {
         throw new Error(`client-modules: bundle ${url} loaded without registering "${id}" via __ModuleLoader__.load`)
       }
-      if (reloadUrl !== undefined && this.reloadUrls.get(id) === reloadUrl) {
+      const reloadUrl = this.reloadUrls.get(id)
+      if (reloadUrl !== undefined && (reloadUrl === url || reloadUrl.startsWith(url))) {
         this.reloadUrls.delete(id)
       }
     })
@@ -212,7 +240,7 @@ export class ClientModuleSystem implements ClientModuleLoader {
     }
   }
 
-  async import(specifier: string): Promise<unknown> {
+  async import(specifier: string, _parentURL = '', _attrs: Record<string, unknown> = {}): Promise<unknown> {
     if (this.seed.has(specifier)) return this.seed.get(specifier)
     const id = stripClientSuffix(specifier)
     const existing = this.loadCache.get(id)
@@ -241,8 +269,15 @@ export class ClientModuleSystem implements ClientModuleLoader {
     const normalized = stripClientSuffix(id)
     if (this.bootstrapIds.has(normalized)) return
     const row = this.graphRows.get(normalized)
-    if (row !== undefined) this.reloadUrls.set(normalized, atRevision(row.url, rev ?? row.rev))
-    else this.reloadUrls.delete(normalized)
+    if (row !== undefined) {
+      if (rev !== undefined) {
+        row.rev = rev
+        row.url = atRevision(row.url, rev)
+      }
+      this.reloadUrls.set(normalized, atRevision(row.url, rev ?? row.rev))
+    } else {
+      this.reloadUrls.delete(normalized)
+    }
     this.factories.delete(normalized)
     this.loadCache.delete(normalized)
   }
