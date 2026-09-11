@@ -19,7 +19,7 @@ import type {} from '@deepseek-ai/dsh-jobs'
 import type {} from '@deepseek-ai/dsh-user-approval'
 import type {} from '@deepseek-ai/dsh-shell-env'
 import type { SandboxExecutionPolicy, SandboxMode } from '@deepseek-ai/dsh-sandbox'
-import { ESCALATION_TARGETS, approveEscalation, canonicalPath, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
+import { ESCALATION_TARGETS, WIDER_MODES, approveEscalation, canonicalPath, validateEscalationArgs } from '@deepseek-ai/dsh-sandbox'
 import type { SandboxPolicyService } from '@deepseek-ai/dsh-sandbox-policy'
 import { DSH_ENV_PREFIX } from '@deepseek-ai/dsh-shell'
 import type { ShellRunResult } from '@deepseek-ai/dsh-shell'
@@ -61,9 +61,9 @@ function validateBashArgs(args: BashToolArgs): void {
   if (args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0)) {
     throw new Error(`invalid timeoutMs: expected a positive number, got ${JSON.stringify(args.timeoutMs)}`)
   }
-  // The escalation pairing (sandbox_permissions ⇔ justification, non-empty) is
-  // the shared rule both enforcing families validate identically.
-  validateEscalationArgs(args.sandbox_permissions, args.justification)
+  if (args.justification !== undefined && args.sandbox_permissions === undefined) {
+    throw new Error('invalid escalation: justification is only valid together with sandbox_permissions')
+  }
 }
 
 function bashDescription(backgroundEnabled: boolean, escalationModes: readonly SandboxMode[]): string {
@@ -330,9 +330,22 @@ export function apply(ctx: Context, config: Config = {}): void {
       validateBashArgs(args)
       // Description is display metadata; workdir defaults to the caller's session.
       const standingPolicy = resolveSandboxPolicy(exec)
-      const approvedMode = args.sandbox_permissions !== undefined && args.justification !== undefined
-        ? await approveBashEscalation(args.sandbox_permissions, args.justification, exec, standingPolicy)
-        : undefined
+      let approvedMode: SandboxMode | undefined
+      if (args.sandbox_permissions !== undefined) {
+        if (escalationModes.length === 0) {
+          throw new Error('sandbox_permissions is not available in this composition (no sandboxing executor to escalate)')
+        }
+        const effectiveMode = (standingPolicy as SandboxExecutionPolicy).mode
+        const isStrictlyWider = (WIDER_MODES[effectiveMode] ?? []).includes(args.sandbox_permissions as SandboxMode)
+        const isSatisfied = !isStrictlyWider
+          && (effectiveMode === 'read-only' || effectiveMode === 'workspace-write' || effectiveMode === 'danger-full-access')
+        if (!isSatisfied) {
+          validateEscalationArgs(args.sandbox_permissions, args.justification)
+          if (args.justification !== undefined) {
+            approvedMode = await approveBashEscalation(args.sandbox_permissions, args.justification, exec, standingPolicy)
+          }
+        }
+      }
       const policy = approvedMode === undefined
         ? standingPolicy
         : { ...(standingPolicy as SandboxExecutionPolicy), mode: approvedMode }
