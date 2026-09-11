@@ -914,6 +914,51 @@ async function nodeEntryKind(fullPath: string, entry: { isDirectory(): boolean; 
   }
 }
 
+function sanitizeFrontmatterYaml(raw: string): string {
+  const lines = raw.split(/\r?\n/)
+  return lines.map((line) => {
+    if (/^\s*#/.test(line) || /^\s*$/.test(line)) {
+      return line
+    }
+    const match = line.match(/^(\s*[\w.-]+:\s+)(.+)$/)
+    if (match && match[1] !== undefined && match[2] !== undefined) {
+      const prefix = match[1]
+      const rest = match[2]
+      const trimmed = rest.trim()
+      if (
+        trimmed === '|' || trimmed === '>' ||
+        trimmed.startsWith('|-') || trimmed.startsWith('|+') ||
+        trimmed.startsWith('>-') || trimmed.startsWith('>+') ||
+        trimmed.startsWith('"') || trimmed.startsWith("'")
+      ) {
+        return line
+      }
+      // Issue #5391: Unquoted scalars containing ': ' are parsed by YAML 1.2 as nested compact mappings and throw syntax errors.
+      // Auto-wrap the scalar in double quotes so it is safely parsed as a string value.
+      if (trimmed.includes(': ')) {
+        return `${prefix}${JSON.stringify(trimmed)}`
+      }
+    }
+    return line
+  }).join('\n')
+}
+
+function safeParseFrontmatterYaml(yaml: string): unknown {
+  try {
+    return parseYaml(yaml)
+  } catch (error) {
+    const sanitized = sanitizeFrontmatterYaml(yaml)
+    if (sanitized !== yaml) {
+      try {
+        return parseYaml(sanitized)
+      } catch {
+        throw error
+      }
+    }
+    throw error
+  }
+}
+
 function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: string } | undefined {
   const firstLineEnd = raw.indexOf('\n')
   if (firstLineEnd < 0) return undefined
@@ -923,7 +968,7 @@ function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: s
   const closing = findClosingFrontmatter(raw, start)
   if (closing === undefined) return undefined
   const yaml = raw.slice(start, closing.start)
-  const parsed = parseYaml(yaml) as unknown
+  const parsed = safeParseFrontmatterYaml(yaml) as unknown
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined
   return { data: parsed as Record<string, unknown>, body: raw.slice(closing.bodyStart) }
 }

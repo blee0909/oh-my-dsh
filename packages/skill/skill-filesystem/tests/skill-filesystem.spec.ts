@@ -418,7 +418,30 @@ describe('FileSystemSkillProvider', () => {
     expect((await ctx.skills.list()).map(skill => skill.name)).toEqual(['good-skill'])
   })
 
-  it.each([false, true])('publishes regular-file paths for linked skills while retaining their resource roots (filesystem service: %s)', async (withFileSystem) => {
+  it('recovers unquoted scalar fields containing colons from frontmatter (#5391)', async () => {
+    const home = await tempDir('skill-colon-yaml')
+    const root = join(home, '.dsh/skills')
+    await mkdir(root, { recursive: true })
+    await writeFile(join(root, 'colon-skill.md'), [
+      '---',
+      'name: colon-skill',
+      'description: Note: this description contains a colon: and more details',
+      'whenToUse: Step 1: run after build',
+      '---',
+      '',
+      'Body with colon.',
+    ].join('\n'))
+
+    const ctx = await setupLocal(home)
+
+    const skill = await ctx.skills.get('colon-skill')
+    expect(skill?.name).toBe('colon-skill')
+    expect(skill?.description).toBe('Note: this description contains a colon: and more details')
+    expect(skill?.whenToUse).toBe('Step 1: run after build')
+    expect(skill?.content).toBe('Body with colon.')
+  })
+
+  it.skipIf(process.platform === 'win32').each([false, true])('publishes regular-file paths for linked skills while retaining their resource roots (filesystem service: %s)', async (withFileSystem) => {
     const home = await tempDir('skill-symlink-home')
     const external = await tempDir('skill-symlink-external')
     await writeSkill(external, 'linked-dir', 'Linked directory')
@@ -815,7 +838,7 @@ describe('FileSystemSkillProvider', () => {
     disposeProvider()
   })
 
-  it('refreshes frontmatter through a followed skill symlink', { timeout: 10000 }, async () => {
+  it.skipIf(process.platform === 'win32')('refreshes frontmatter through a followed skill symlink', { timeout: 10000 }, async () => {
     const home = await tempDir('skill-watch-symlink-home')
     const external = await tempDir('skill-watch-symlink-external')
     const root = join(home, '.dsh/skills')
