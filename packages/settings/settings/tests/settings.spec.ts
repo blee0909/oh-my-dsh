@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { SettingsProvider, SettingsConflictError, type SettingsNamespace, type SettingsScope, type SettingsUpdateSource } from '../src/index.ts'
+import { SettingsProvider, SettingsConflictError, settingsNamespace, type SettingsNamespace, type SettingsScope, type SettingsUpdateSource } from '../src/index.ts'
 import { deepEqualJson } from '@deepseek-ai/dsh-util-values'
 import { MemorySettings } from './memory.ts'
 
@@ -1054,5 +1054,11 @@ describe('revision and conflict detection', () => {
       (ctx.settings as unknown as { publish(doc: Record<string, unknown>): void })
         .publish({ rev: { b: 'edited on disk' } })
     }).toThrow(/forged revision/)
+  })
+
+  it('exports settingsNamespace runtime validator for backward compatibility (#5771)', () => {
+    expect(typeof settingsNamespace).toBe('function')
+    expect(settingsNamespace('my-plugin')).toBe('my-plugin')
+    expect(() => settingsNamespace('INVALID_NS')).toThrow(TypeError)
   })
 })

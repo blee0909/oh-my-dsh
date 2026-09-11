@@ -135,9 +135,18 @@ function parseArgs(argsRaw: string): unknown {
   }
 }
 
+/** Maximum character length permitted for a single-line ToolRow summary to prevent DOM bloat (#5369). */
+export const MAX_TOOL_SUMMARY_CHARS = 240
+
 function firstLine(text: string): string {
   const nl = text.indexOf('\n')
   return nl === -1 ? text : text.slice(0, nl)
+}
+
+function truncateSummary(text: string): string {
+  const line = firstLine(text)
+  if (line.length <= MAX_TOOL_SUMMARY_CHARS) return line
+  return `${line.slice(0, MAX_TOOL_SUMMARY_CHARS)}…`
 }
 
 function pickString(args: Record<string, unknown>, keys: readonly string[]): string | undefined {
@@ -159,21 +168,20 @@ const SUMMARY_KEYS: Record<ToolRowVariant, readonly string[]> = {
   others: [],
 }
 
-
 function deriveSummary(variant: ToolRowVariant, argsRaw: string): string {
   const parsed = parseArgs(argsRaw)
-  if (typeof parsed !== 'object' || parsed === null) return firstLine(argsRaw)
+  if (typeof parsed !== 'object' || parsed === null) return truncateSummary(argsRaw)
   const args = parsed as Record<string, unknown>
   if (variant === 'search' && Array.isArray(args.queries)) {
     const queries = args.queries.filter((query): query is string => typeof query === 'string' && query !== '')
-    if (queries.length > 0) return queries.map(firstLine).join(', ')
+    if (queries.length > 0) return truncateSummary(queries.map(firstLine).join(', '))
   }
   const picked = pickString(args, SUMMARY_KEYS[variant])
-  if (picked !== undefined) return firstLine(picked)
+  if (picked !== undefined) return truncateSummary(picked)
   for (const v of Object.values(args)) {
-    if (typeof v === 'string' && v !== '') return firstLine(v)
+    if (typeof v === 'string' && v !== '') return truncateSummary(v)
   }
-  return firstLine(argsRaw)
+  return truncateSummary(argsRaw)
 }
 
 /** Path keys only — never `url` (web_fetch lands on the read variant). */
@@ -230,9 +238,10 @@ export function toolRowModel(toolName: string, block: ToolCallBlock, cwd?: strin
   const toolTitleKey = TOOL_TITLE_KEYS[toolName]
   // Others keeps the static "Tool call" title (figma literal); the real tool
   // name rides the mutable summary slot unless the tool owns a specific title.
-  const summary = variant === 'others' && toolName !== '' && toolTitleKey === undefined
+  const rawSummary = variant === 'others' && toolName !== '' && toolTitleKey === undefined
     ? `${toolName} · ${base}`
     : base
+  const summary = truncateSummary(rawSummary)
   // The empty string is "no text" for both derived result fields: a settled
   // call with blank content has nothing to expand, and a blank first line
   // would erase the collapsed error row's summary slot.

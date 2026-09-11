@@ -668,6 +668,50 @@ describe('Typert Remote streams', () => {
     await unregister()
   })
 
+  it('settles waterfall in-process and broadcasts cancellation to active Clients (#5436)', async () => {
+    const { ctx } = await setup(true)
+    const source = new RemoteEventSourceProbe()
+    const unregister = ctx.typertGateway.registerRemoteEvents(source.source, REMOTE_HOST)
+    const agent = ctx.extend()
+    const first = await openEventClient(ctx, 'events-inproc-a')
+    const second = await openEventClient(ctx, 'events-inproc-b')
+    const pending = pendingInvocation(agent)
+    source.push(pending.dispatch)
+
+    await vi.waitFor(() => {
+      expect(deliveredInvocation(first)).toBeDefined()
+      expect(deliveredInvocation(second)).toBeDefined()
+    })
+    const firstFrame = deliveredInvocation(first)!
+    const secondFrame = deliveredInvocation(second)!
+    expect(firstFrame.eventId).toBe(secondFrame.eventId)
+
+    // Host-side plugin resolves the pending event in-process
+    ctx.typertGateway.resolveRemoteEventResult({
+      clientId: 'host-plugin' as RemoteEventClientId,
+      eventId: firstFrame.eventId,
+      outcome: { kind: 'result', value: 'answered-by-host-plugin' },
+    })
+
+    await expect(pending.outcome).resolves.toEqual({ kind: 'result', value: 'answered-by-host-plugin' })
+    await vi.waitFor(() => {
+      expect(first.frames).toContainEqual({
+        type: 'item',
+        streamId: first.streamId,
+        value: { type: 'cancel', eventId: firstFrame.eventId },
+      })
+      expect(second.frames).toContainEqual({
+        type: 'item',
+        streamId: second.streamId,
+        value: { type: 'cancel', eventId: firstFrame.eventId },
+      })
+    })
+
+    first.socket.close()
+    second.socket.close()
+    await unregister()
+  })
+
   it('rejects the Host waterfall with the first Client listener rejection', async () => {
     const { ctx } = await setup(true)
     const source = new RemoteEventSourceProbe()

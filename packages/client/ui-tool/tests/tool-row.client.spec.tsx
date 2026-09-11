@@ -6,7 +6,7 @@ import type { RunningToolCall, ToolResultNode } from '@deepseek-ai/dsh-client-ui
 import { makeTranslate } from '@deepseek-ai/dsh-client-test-runtime'
 import { zh as commonZh } from '@deepseek-ai/dsh-client-locale/src/locales/zh.ts'
 import {
-  classifyTool, formatToolBody, resultText, toolRowModel,
+  classifyTool, formatToolBody, resultText, toolRowModel, MAX_TOOL_SUMMARY_CHARS,
 } from '../src/client/tool/models/tool-call-model.ts'
 import { ToolRow } from '../src/client/tool/components/ToolRow.tsx'
 import { GenericToolCard, type GenericToolCardProps } from '../src/client/tool/toolviews/GenericToolCard.tsx'
@@ -493,5 +493,26 @@ describe('GenericToolCard', () => {
     const bashView = render(<GenericToolCard {...bash} />)
     fireEvent.click(bashView.getByText('List files'))
     expect(bash.openFile).not.toHaveBeenCalled()
+  })
+
+  it('bounds derived summary to MAX_TOOL_SUMMARY_CHARS when argsRaw is huge (#5369)', () => {
+    // Simulate a massive 1MB JSON string or long command
+    const hugeDescription = 'A'.repeat(50_000)
+    const hugeArgsRaw = JSON.stringify({ description: hugeDescription })
+    const model = toolRowModel('custom_tool', running({
+      name: 'custom_tool',
+      argsRaw: hugeArgsRaw,
+    }))
+    expect(model.summary.length).toBeLessThanOrEqual(MAX_TOOL_SUMMARY_CHARS + 1)
+    expect(model.summary.endsWith('…')).toBe(true)
+    expect(model.summary.startsWith('custom_tool · A')).toBe(true)
+
+    const bashModel = toolRowModel('bash', running({
+      name: 'bash',
+      argsRaw: hugeArgsRaw,
+    }))
+    expect(bashModel.summary.length).toBeLessThanOrEqual(MAX_TOOL_SUMMARY_CHARS + 1)
+    expect(bashModel.summary.endsWith('…')).toBe(true)
+    expect(bashModel.summary.startsWith('A'.repeat(100))).toBe(true)
   })
 })

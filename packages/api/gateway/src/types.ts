@@ -4,7 +4,9 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { RemoteEventHostInfo } from './stream-protocol.ts'
+import type { RemoteEventHostInfo, RemoteEventResult } from './stream-protocol.ts'
+
+export type { RemoteEventResult } from './stream-protocol.ts'
 
 /** One Remote method request after a carrier has decoded its envelope. */
 export interface InvokeRemoteRequest {
@@ -149,6 +151,13 @@ export interface TypertGateway {
    * @returns a cancellation-aware iterable over the business results.
    */
   stream(request: InvokeRemoteRequest): Promise<AsyncIterable<unknown>>
+
+  /**
+   * Settle a pending remote event directly from an in-process caller or host plugin.
+   * Enables first-to-answer waterfall settlement and closes remote client interaction cards.
+   * @param result - remote event outcome payload containing eventId and outcome.
+   */
+  resolveRemoteEventResult(result: RemoteEventResult): void
 }
 
 declare module '@deepseek-ai/cordis' {

@@ -54,11 +54,13 @@ import {
   type RemoteEventId,
   type RemoteEventInvocationFrame,
   type RemoteEventReadyFrame,
+  type RemoteEventResult,
   type RemoteStreamFailure,
 } from './stream-protocol.ts'
 
 export type {
   InvokeRemoteRequest,
+  RemoteEventResult,
   TypertGateway,
   TypertGatewayErrorCode,
   TypertGatewayWireStream,
@@ -347,6 +349,26 @@ export class TypertGatewayService extends Service implements TypertGateway {
       prepared.endpoint,
       request.signal ?? NEVER_ABORTED_SIGNAL,
     )
+  }
+
+  /**
+   * Settle a pending remote event directly from an in-process caller or host plugin.
+   * Enables first-to-answer waterfall settlement and closes remote client interaction cards.
+   * @param result - remote event outcome payload containing eventId and outcome.
+   */
+  resolveRemoteEventResult(result: RemoteEventResult): void {
+    const pending = this.pendingRemoteEvents.get(result.eventId)
+    if (pending === undefined) return
+    if (result.outcome.kind === 'result') {
+      this.settleRemoteEvent(pending, {
+        kind: 'result',
+        value: result.outcome.value,
+      })
+    } else if (result.outcome.kind === 'rejected') {
+      this.cancelRemoteEvent(pending, restoreRemoteEventRejection(result.outcome.error))
+    } else if (result.outcome.kind === 'next') {
+      this.settleRemoteEvent(pending, { kind: 'next' })
+    }
   }
 
   private async dispatchRpc(

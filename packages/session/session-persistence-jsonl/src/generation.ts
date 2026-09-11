@@ -14,6 +14,7 @@ import {
   open as fsOpen,
   readFile as fsReadFile,
   readdir as fsReaddir,
+  rename as fsRename,
   rm as fsRm,
   stat as fsStat,
   type FileHandle,
@@ -176,6 +177,7 @@ interface GenerationFileSystem {
   stat(path: string): Promise<JsonlPhysicalIdentity>
   lstat(path: string): Promise<{ isFile(): boolean; isSymbolicLink(): boolean }>
   link(existingPath: string, newPath: string): Promise<void>
+  rename?(oldPath: string, newPath: string): Promise<void>
   rm(path: string): Promise<void>
 }
 
@@ -216,6 +218,7 @@ const defaultFileSystem: GenerationFileSystem = {
   stat: path => fsStat(path, { bigint: true }),
   lstat: path => fsLstat(path),
   link: fsLink,
+  rename: fsRename,
   rm: path => fsRm(path, { force: true }),
 }
 
@@ -229,6 +232,11 @@ const defaultInternals: JsonlGenerationInternals = {
 
 function isEEXIST(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | null)?.code === 'EEXIST'
+}
+
+function isUnsupportedLinkError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+  return code === 'EPERM' || code === 'ENOSYS' || code === 'EXDEV' || code === 'EOPNOTSUPP' || code === 'ENOTSUP'
 }
 
 /** Whether a filesystem-owned failure should retain its original errno and path. */
@@ -830,6 +838,13 @@ async function publishCurrentExclusive(
   } catch (error) {
     /* v8 ignore else -- a non-collision filesystem error propagates unchanged. */
     if (isEEXIST(error)) return false
+    // Defense (#5432): on filesystems without hardlink support (e.g. HarmonyOS hmdfs, FUSE),
+    // fallback to rename if link throws EPERM/ENOSYS/EXDEV.
+    if (isUnsupportedLinkError(error) && internals.fs.rename) {
+      await internals.fs.rename(staged, currentPath)
+      await syncDirectory(dirname(currentPath), internals)
+      return true
+    }
     /* v8 ignore next -- the filesystem error is already complete. */
     throw error
   }

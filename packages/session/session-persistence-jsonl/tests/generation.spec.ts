@@ -1227,7 +1227,16 @@ describe('JSONL immutable generation publication', () => {
       await writeFile(request.sourcePath, source)
       if (kind === 'different') await writeFile(request.currentPath, line(header(3)) + line(event1))
       if (kind === 'malformed') await writeFile(request.currentPath, '{not-json}\n')
-      if (kind === 'symlink') await symlink(request.sourcePath, request.currentPath)
+      if (kind === 'symlink') {
+        try {
+          await symlink(request.sourcePath, request.currentPath)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'EPERM' && process.platform === 'win32') {
+            return
+          }
+          throw error
+        }
+      }
       if (kind === 'directory') await mkdir(request.currentPath)
 
       await expect(ensureJsonlGenerationCurrent(request)).rejects.toBeInstanceOf(
@@ -1614,6 +1623,25 @@ describe('JSONL immutable generation publication', () => {
     )
 
     expect(raced).toBe(true)
+    expect(await readFile(request.currentPath, 'utf8')).toBe(line(header(3)) + line(event0))
+  })
+
+  it('falls back to rename when link throws EPERM on filesystems without hardlink support (#5432)', async () => {
+    const root = await tempRoot()
+    const request = options(root)
+    await writeFile(request.sourcePath, line(header(0)) + line(event0))
+    let linkAttempted = false
+    const linkFile = async (_existingPath: string, _newPath: string) => {
+      linkAttempted = true
+      throw fsError('EPERM')
+    }
+
+    await ensureWithOverrides(
+      request,
+      { platform: 'darwin', fs: posixSimulationFs({ link: linkFile }) },
+    )
+
+    expect(linkAttempted).toBe(true)
     expect(await readFile(request.currentPath, 'utf8')).toBe(line(header(3)) + line(event0))
   })
 

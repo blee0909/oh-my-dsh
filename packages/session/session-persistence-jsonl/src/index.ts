@@ -13,7 +13,12 @@ import {
   sessionFormatCatalog,
 } from '@deepseek-ai/dsh-session-format-catalog'
 import { readdirSync, type Dirent } from 'node:fs'
-import { open, mkdir, readdir, realpath, link, rm, stat, truncate } from 'node:fs/promises'
+import { open, mkdir, readdir, realpath, link, rename, rm, stat, truncate } from 'node:fs/promises'
+
+function isUnsupportedLinkError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null | undefined)?.code
+  return code === 'EPERM' || code === 'ENOSYS' || code === 'EXDEV' || code === 'EOPNOTSUPP' || code === 'ENOTSUP'
+}
 import { dirname, join, resolve } from 'node:path'
 import { performance } from 'node:perf_hooks'
 import { scheduler } from 'node:timers/promises'
@@ -1133,27 +1138,40 @@ class JsonlSessionPersistence extends SessionPersistence {
     // Publish via link()+unlink(), NOT rename(): link fails with EEXIST if the
     // final path already exists, so two processes materializing the same id
     // concurrently cannot clobber each other. rename() would silently overwrite.
+    // Defense (#5432): on filesystems without hardlink support (e.g. HarmonyOS hmdfs, FUSE),
+    // link fails with EPERM/ENOSYS/EXDEV; fall back to rename() as rejectExistingLog already ran.
     let linked = false
+    let published = false
     try {
       await link(tmp, finalPath)
       linked = true
+      published = true
+    } catch (error) {
+      if (isUnsupportedLinkError(error)) {
+        await rename(tmp, finalPath)
+        published = true
+      } else {
+        throw error
+      }
     } finally {
       // Remove an unpublished temp on failure. After publication, defer cleanup
       // until the directory entry is durable so cleanup cannot reject a live log.
       /* v8 ignore next -- link failure is the TOCTOU/IO race guarded above; not reachable in test */
-      if (!linked) await rm(tmp, { force: true })
+      if (!published) await rm(tmp, { force: true })
     }
-    // link() succeeded — the log is published. fsync the directory so the new
+    // publish succeeded — the log is published. fsync the directory so the new
     // entry survives a power loss: the new link is not crash-durable until the
     // parent directory's metadata is synced.
     await this.syncDirPosix(dir)
-    // Best-effort temp cleanup: the log is already published and durable, so a
-    // failure to remove the redundant temp hard link must NOT reject the
-    // append. Swallow only the rm failure; nothing else of consequence runs here.
-    try {
-      await rm(tmp, { force: true })
-    } catch {
-      /* v8 ignore next -- redundant temp link; publish already durable, rm failure is an unreachable IO edge */
+    if (linked) {
+      // Best-effort temp cleanup: the log is already published and durable, so a
+      // failure to remove the redundant temp hard link must NOT reject the
+      // append. Swallow only the rm failure; nothing else of consequence runs here.
+      try {
+        await rm(tmp, { force: true })
+      } catch {
+        /* v8 ignore next -- redundant temp link; publish already durable, rm failure is an unreachable IO edge */
+      }
     }
   }
   /* v8 ignore stop */
