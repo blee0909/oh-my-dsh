@@ -13,6 +13,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  rmSync,
   unlinkSync,
   writeFileSync,
   writeSync,
@@ -177,8 +178,19 @@ function profilePluginNames(projectDir: string): readonly string[] {
   return plugins
 }
 
+function safeInspectPlugin(projectDir: string, requestedName: string): DesktopPluginRecord {
+  try {
+    return inspectPlugin(projectDir, requestedName)
+  } catch {
+    const dependencies = projectManifest(projectDir).dependencies
+    const version = typeof dependencies[requestedName] === 'string' ? dependencies[requestedName] : '0.0.0'
+    const enabled = profilePluginNames(projectDir).includes(requestedName)
+    return { name: requestedName, version, enabled }
+  }
+}
+
 function pluginRecords(projectDir: string): readonly DesktopPluginRecord[] {
-  return Object.keys(projectManifest(projectDir).dependencies).sort().map(name => inspectPlugin(projectDir, name))
+  return Object.keys(projectManifest(projectDir).dependencies).sort().map(name => safeInspectPlugin(projectDir, name))
 }
 
 function writeProfilePlugins(projectDir: string, plugins: readonly DesktopPluginRecord[]): void {
@@ -395,7 +407,22 @@ export class DesktopProjectManager {
           throw new Error(`desktop project: plugin ${JSON.stringify(mutation.name)} is not installed`)
         }
         const remaining = pluginRecords(projectDir).filter(plugin => plugin.name !== mutation.name)
-        await this.runPnpm(projectDir, ['remove', mutation.name, '--config.ignore-scripts=true'])
+        try {
+          await this.runPnpm(projectDir, ['remove', mutation.name, '--config.ignore-scripts=true'])
+        } catch {
+          const manifest = projectManifest(projectDir)
+          if (Object.hasOwn(manifest.dependencies, mutation.name)) {
+            const nextDependencies: Record<string, string> = {}
+            for (const [key, value] of Object.entries(manifest.dependencies)) {
+              if (key !== mutation.name) nextDependencies[key] = value
+            }
+            writeJson(join(projectDir, 'package.json'), { ...manifest, dependencies: nextDependencies })
+          }
+        }
+        const packageDir = join(projectDir, 'node_modules', ...mutation.name.split('/'))
+        if (existsSync(packageDir)) {
+          rmSync(packageDir, { recursive: true, force: true })
+        }
         writeProfilePlugins(projectDir, remaining)
         return
       }

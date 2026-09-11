@@ -398,4 +398,30 @@ describe('desktop external plugin profile', () => {
     }
     expect(existsSync(manager.paths.lock)).toBe(false)
   })
+
+  it('removes a corrupted plugin whose package.json manifest is missing or invalid (#6132)', async () => {
+    const { manager } = setup()
+    await manager.applyRelease()
+    await manager.mutate({ type: 'plugin-add', spec: 'corrupted-plugin@1.0.0' }, hooks())
+
+    expect(manager.listPlugins().map(p => p.name)).toContain('corrupted-plugin')
+
+    const manifestPath = join(manager.paths.profile, 'node_modules/corrupted-plugin/package.json')
+    unlinkSync(manifestPath)
+    expect(existsSync(manifestPath)).toBe(false)
+
+    expect(manager.listPlugins().some(p => p.name === 'corrupted-plugin')).toBe(true)
+
+    await expect(
+      manager.mutate({ type: 'plugin-remove', name: 'corrupted-plugin' }, hooks()),
+    ).resolves.toBeUndefined()
+
+    expect(manager.listPlugins().some(p => p.name === 'corrupted-plugin')).toBe(false)
+    const profileJson = JSON.parse(readFileSync(join(manager.paths.profile, 'package.json'), 'utf8')) as {
+      dependencies: Record<string, string>
+      dsh: { profile: { bundles: string[] } }
+    }
+    expect(profileJson.dependencies['corrupted-plugin']).toBeUndefined()
+    expect(profileJson.dsh.profile.bundles).not.toContain('corrupted-plugin')
+  })
 })
