@@ -50,4 +50,6 @@ function main(): void {
   )
 }
 
-if (import.meta.main) main()
+if (Boolean(import.meta.main) || (process.argv[1] !== undefined && import.meta.filename === resolve(process.argv[1]))) {
+  main()
+}
