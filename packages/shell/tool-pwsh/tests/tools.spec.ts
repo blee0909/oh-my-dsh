@@ -389,6 +389,33 @@ describe('argument validation', () => {
     expect(text(await call(ctx, 'pwsh', { command: 'Write-Output hi', description: 'd', timeoutMs: -1 })))
       .toContain('invalid timeoutMs: expected a positive number')
   })
+
+  it('rejects suicide commands targeting the host harness (Self-Preservation Guard #5409)', async () => {
+    const { ctx, bash } = await setup()
+    const suicideCommands = [
+      'systemctl --user stop deepseek-harness.service',
+      'systemctl restart deepseek-harness',
+      'service deepseek-harness stop',
+      'pkill -f dsh',
+      'killall -9 deepseek-harness',
+      'kill -9 $PPID',
+      `kill -9 ${process.pid}`,
+      `taskkill /F /PID ${process.pid}`,
+      'taskkill /IM dsh.exe /F',
+      'Stop-Process -Name dsh',
+    ]
+    for (const cmd of suicideCommands) {
+      const result = await call(ctx, 'pwsh', { command: cmd, description: 'kill host' })
+      const resText = text(result)
+      if (!resText.includes('Refused: Cannot execute commands targeting the host harness (Self-Preservation Guard)')) {
+        throw new Error(`Failed to block: "${cmd}", received: "${resText}"`)
+      }
+    }
+    // Benign commands must not be blocked
+    bash.handler = () => runResult('ok\n')
+    const benign = await call(ctx, 'pwsh', { command: 'Get-ChildItem', description: 'list' })
+    expect(text(benign)).toContain('ok')
+  })
 })
 
 describe('execution through the bash seam', () => {

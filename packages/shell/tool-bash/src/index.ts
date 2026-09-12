@@ -51,6 +51,36 @@ interface BashToolArgs {
   justification?: string
 }
 
+/**
+ * Guard the host harness process against accidental suicide or termination
+ * by commands executed within the agent loop (Discussions #5409).
+ */
+export function checkSelfPreservation(command: string): void {
+  const trimmed = command.trim()
+  if (/\bsystemctl\s+(?:--\w+(?:=\S+)?\s+)*(?:stop|restart|kill|disable|mask)\s+(?:deepseek-harness|dsh)(?:\.service)?\b/i.test(trimmed)
+      || /\bservice\s+(?:deepseek-harness|dsh)(?:\.service)?\s+(?:stop|restart|kill|disable|mask)\b/i.test(trimmed)) {
+    throw new Error('Refused: Cannot execute commands targeting the host harness (Self-Preservation Guard)')
+  }
+  if (/\b(?:pkill|killall)\s+(?:-[a-z0-9]+\s+)*.*?(?:deepseek-harness|\bdsh\b)/i.test(trimmed)) {
+    throw new Error('Refused: Cannot execute commands targeting the host harness (Self-Preservation Guard)')
+  }
+  const currentPid = process.pid
+  const parentPid = process.ppid
+  if (/\bkill\s+(?:-[a-z0-9]+\s+)*(?:\$PPID|%PPID%|\$PID|%PID%)\b/i.test(trimmed)) {
+    throw new Error('Refused: Cannot execute commands targeting the host harness (Self-Preservation Guard)')
+  }
+  if (currentPid > 0 && new RegExp(`\\b(?:kill|taskkill(?:\\.exe)?|Stop-Process)\\b.*?\\b${currentPid}\\b`, 'i').test(trimmed)) {
+    throw new Error('Refused: Cannot execute commands targeting the host harness (Self-Preservation Guard)')
+  }
+  if (parentPid > 0 && new RegExp(`\\b(?:kill|taskkill(?:\\.exe)?|Stop-Process)\\b.*?\\b${parentPid}\\b`, 'i').test(trimmed)) {
+    throw new Error('Refused: Cannot execute commands targeting the host harness (Self-Preservation Guard)')
+  }
+  if (/\btaskkill(?:\.exe)?\s+.*\/IM\s+(?:dsh|deepseek-harness)(?:\.exe)?\b/i.test(trimmed)
+      || /\bStop-Process\s+.*-(?:Name|ProcessName)\s+(?:dsh|deepseek-harness)\b/i.test(trimmed)) {
+    throw new Error('Refused: Cannot execute commands targeting the host harness (Self-Preservation Guard)')
+  }
+}
+
 function validateBashArgs(args: BashToolArgs): void {
   if (args.command.trim().length === 0) {
     throw new Error('invalid command: expected a non-empty string')
@@ -64,6 +94,7 @@ function validateBashArgs(args: BashToolArgs): void {
   if (args.justification !== undefined && args.sandbox_permissions === undefined) {
     throw new Error('invalid escalation: justification is only valid together with sandbox_permissions')
   }
+  checkSelfPreservation(args.command)
 }
 
 function bashDescription(backgroundEnabled: boolean, escalationModes: readonly SandboxMode[]): string {

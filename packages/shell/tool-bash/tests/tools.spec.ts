@@ -361,6 +361,28 @@ describe('bash tool', () => {
     expect(text(result)).toMatch(pattern)
   })
 
+  it('rejects suicide commands targeting the host harness (Self-Preservation Guard #5409)', async () => {
+    const suicideCommands = [
+      'systemctl --user stop deepseek-harness.service',
+      'systemctl restart deepseek-harness',
+      'service deepseek-harness stop',
+      'pkill -f dsh',
+      'killall -9 deepseek-harness',
+      'kill -9 $PPID',
+      `kill -9 ${process.pid}`,
+      `taskkill /F /PID ${process.pid}`,
+      'taskkill /IM dsh.exe /F',
+      'Stop-Process -Name dsh',
+    ]
+    for (const cmd of suicideCommands) {
+      expect(() => ToolBash.checkSelfPreservation(cmd))
+        .toThrow('Refused: Cannot execute commands targeting the host harness (Self-Preservation Guard)')
+    }
+    // Benign commands are not blocked
+    expect(() => ToolBash.checkSelfPreservation('echo hello')).not.toThrow()
+    expect(() => ToolBash.checkSelfPreservation('git status')).not.toThrow()
+  })
+
   it('rejects a non-JSON numeric argument before tool-specific validation', async () => {
     const ctx = await setup()
     const result = await call(ctx, 'bash', {
