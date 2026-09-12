@@ -42,6 +42,12 @@ export interface Config {
    * completion wakes it again.
    */
   maxConsecutiveWakes?: number
+  /**
+   * Whether successful jobs with productive progress (e.g. clean zero exit)
+   * renew the consecutive wake budget to prevent stalling valid multi-step
+   * background pipelines (Discussions #5428). Defaults to true.
+   */
+  renewOnProgress?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -49,6 +55,7 @@ export const Config: z<Config> = z.object({
   maxWaitTimeoutMs: z.number().min(1).default(600_000),
   completionDelivery: z.union(['quiet', 'wakeup'] as const).default('wakeup'),
   maxConsecutiveWakes: z.number().min(1).default(3),
+  renewOnProgress: z.boolean().default(true),
 })
 
 /** Task state safe for model-authored programs; ownership/bookkeeping fields are omitted. */
@@ -206,6 +213,7 @@ export function apply(ctx: Context, config: Config): void {
   const waitCap = config.maxWaitTimeoutMs ?? 600_000
   const delivery = config.completionDelivery ?? 'wakeup'
   const wakeBudget = config.maxConsecutiveWakes ?? 3
+  const renewOnProgress = config.renewOnProgress ?? true
 
   // Turns this plugin opened on each owner since that owner last consumed
   // human input. Keyed by the exact Agent, so a same-session replacement
@@ -289,7 +297,16 @@ export function apply(ctx: Context, config: Config): void {
         summary: completionSummary(snapshot),
       },
     })
-    const spent = spentWakes.get(owner) ?? 0
+    let spent = spentWakes.get(owner) ?? 0
+    const isProductive = renewOnProgress
+      && snapshot.status === 'completed'
+      && typeof snapshot.detail === 'string'
+      && /\bexit code:\s*0\b/i.test(snapshot.detail)
+
+    if (isProductive && spent >= wakeBudget) {
+      spent = 0
+    }
+
     if (delivery === 'wakeup' && owner.status === 'idle' && spent < wakeBudget) {
       spentWakes.set(owner, spent + 1)
       owner.followup(message)

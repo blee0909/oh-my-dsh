@@ -595,6 +595,40 @@ describe('completion notice delivery', () => {
     expect(inject).toHaveBeenCalledTimes(1)
   })
 
+  it('renews wake budget on productive progress preventing idle starvation (#5428)', async () => {
+    const { ctx } = await setup({ maxConsecutiveWakes: 2 })
+    const inject = vi.fn()
+    const followup = vi.fn()
+    const owner = fakeAgent(ctx, 'sess-1', { inject, followup, status: 'idle' })
+
+    // Settle 4 tasks with exit code: 0 (productive)
+    for (let i = 0; i < 4; i += 1) {
+      const p = producer({ owner })
+      ctx.jobs.start(p.spec)
+      p.settle({ status: 'completed', detail: 'exit code: 0' })
+      await tick()
+    }
+    expect(followup).toHaveBeenCalledTimes(4)
+    expect(inject).not.toHaveBeenCalled()
+  })
+
+  it('still degrades to injection when jobs fail or exit with non-zero error code', async () => {
+    const { ctx } = await setup({ maxConsecutiveWakes: 2 })
+    const inject = vi.fn()
+    const followup = vi.fn()
+    const owner = fakeAgent(ctx, 'sess-1', { inject, followup, status: 'idle' })
+
+    // Settle 3 failing tasks (exit code: 1)
+    for (let i = 0; i < 3; i += 1) {
+      const p = producer({ owner })
+      ctx.jobs.start(p.spec)
+      p.settle({ status: 'completed', detail: 'exit code: 1' })
+      await tick()
+    }
+    expect(followup).toHaveBeenCalledTimes(2)
+    expect(inject).toHaveBeenCalledTimes(1)
+  })
+
   it('restores the wake budget when the owner claims a user message', async () => {
     const { ctx } = await setup({ maxConsecutiveWakes: 1 })
     const inject = vi.fn()
