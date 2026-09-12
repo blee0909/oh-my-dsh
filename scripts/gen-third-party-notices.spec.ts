@@ -180,6 +180,25 @@ describe('virtualManifest', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('skips incomplete prefix-matched directories without throwing ENOENT (#6375)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-notices-incomplete-'))
+    try {
+      const name = '@scope/pkg'
+      const store = join(root, 'store')
+      const incompleteDir = join(store, `${name.replace('/', '+')}@1.0.0`)
+      mkdirSync(incompleteDir, { recursive: true })
+
+      const completeDir = join(store, `${name.replace('/', '+')}@2.0.0`, 'node_modules', name)
+      mkdirSync(completeDir, { recursive: true })
+      writeFileSync(join(completeDir, 'package.json'), JSON.stringify({ name, version: '2.0.0', license: 'MIT' }))
+
+      expect(virtualManifest(store, name, '2.0.0')).toMatchObject({ name, version: '2.0.0' })
+      expect(virtualManifest(store, name, '3.0.0')).toBeUndefined()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('parseVendoredRows', () => {
