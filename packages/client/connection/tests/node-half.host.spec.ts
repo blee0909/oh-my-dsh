@@ -606,4 +606,33 @@ describe('connection node half over a real HTTP server', () => {
 
     expect(thirdPartyRegistered).toBe(true)
   })
+
+  it('resolves rpc.handle through attached webContext when caller lacks webServer in its scope (Discussions #6337)', async () => {
+    const root = new Context()
+    const routes: WebRoute[] = []
+    provideBrowserCredentials(root)
+    root.provide('webServer', fakeHttpServer(routes, []) as WebServer)
+
+    const connFiber = root.plugin({ inject: [...inject], apply })
+    await connFiber.await()
+
+    // Simulate caller plugin that only injects connection
+    let channelMounted = false
+    const callerFiber = root.plugin({
+      inject: ['connection'],
+      apply(pluginCtx) {
+        const remove = pluginCtx.connection.rpc.handle('/automation-channel', async () => ({ ok: true, value: {} }))
+        channelMounted = routes.some(r => r.path === '/automation-channel')
+        pluginCtx.effect(() => remove, 'automation-channel')
+      },
+    })
+    await callerFiber.await()
+
+    expect(channelMounted).toBe(true)
+    expect(routes.some(r => r.path === '/automation-channel')).toBe(true)
+
+    // Unload the caller plugin to verify the route unmounts cleanly
+    await callerFiber.dispose()
+    expect(routes.some(r => r.path === '/automation-channel')).toBe(false)
+  })
 })

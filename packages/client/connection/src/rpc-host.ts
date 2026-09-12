@@ -60,6 +60,11 @@ declare module '@deepseek-ai/cordis' {
 export class HostConnectionService extends Service implements HostConnectionHandle {
   private readonly interceptors = new Map<string, ConnectionRpcInterceptor>()
   private readonly fetchRoutes = new Map<string, RegisteredFetchRoute>()
+  /**
+   * The context that injected `webServer`, adopted via {@link attachWebContext}.
+   * `undefined` on deployments without an HTTP server (headless/tui).
+   */
+  private webCtx: Context | undefined
 
   /**
    * Provide the Host half over the active HTTP server.
@@ -73,6 +78,23 @@ export class HostConnectionService extends Service implements HostConnectionHand
     private readonly browserAuth: BrowserAuth,
   ) {
     super(ctx, 'connection')
+  }
+
+  /**
+   * Adopt the context that injected `webServer`, so channel routes can be
+   * mounted through it.
+   *
+   * `rpc.handle` receives the *caller's* Context as its owner, but a caller
+   * cannot inject `webServer` itself: the service lives on a sibling row, so
+   * property access walks only the caller's own ancestor chain and fails with
+   * `cannot get property "webServer" without inject` — which aborts the whole
+   * plugin-tree load, not just the offending plugin. The context that mounted
+   * this service is the one place that both injects `webServer` and stays alive
+   * for the process lifetime, so it is the correct resolver.
+   * @param webCtx - the `webServer`-injected context.
+   */
+  attachWebContext(webCtx: Context): void {
+    this.webCtx = webCtx
   }
 
   /** Generic channel registry scoped to the Context reading this service. */
@@ -175,7 +197,14 @@ export class HostConnectionService extends Service implements HostConnectionHand
         await bridge(req, res, fetchHandler)
       },
     }
-    const webServer = owner.get('webServer')
+    // Resolve through the webServer-injected context, but keep `owner.effect`
+    // as the OUTER wrapper: that is what ties the route's lifetime to the
+    // calling plugin. `webCtx.effect(...)` would tie it to Connection instead,
+    // so a caller that unloads would leave its channel mounted. The `?? owner`
+    // fallback preserves today's behaviour — and its loud failure — on
+    // deployments without an HTTP server (headless/tui).
+    const targetCtx = this.webCtx ?? owner
+    const webServer = targetCtx.get('webServer')
     if (webServer === undefined) {
       throw new Error(`cannot register ${channel} rpc channel: webServer service is not available`)
     }
