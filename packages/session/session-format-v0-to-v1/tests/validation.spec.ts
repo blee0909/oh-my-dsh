@@ -549,10 +549,18 @@ describe('released event and payload inventory', () => {
       }],
       ['command/done', { commandId: 'c', kind: 'error', text: 'failed' }],
       ['compaction/end', { compactionId: 'c', sourceCommandId: 'command', turn: 1, error: 'failure' }],
+      ['permission/preset', { preset: 'workspace-write', origin: 'default' }],
+      ['permission/preset', { preset: 'read-only', origin: 'selection' }],
+      ['permission/preset', { preset: 'danger-full-access', origin: 'inferred' }],
     ]
     for (const [type, data] of remaining) {
       expect(() => { assertPayload(type, data) }, type).not.toThrow()
     }
+  })
+
+  it('rejects permission/preset with invalid origin', () => {
+    expect(() => assertPayload('permission/preset', { preset: 'workspace-write', origin: 'invalid' }))
+      .toThrow(/origin/)
   })
 
   it('validates legacy round-zero goal mutation messages', () => {
