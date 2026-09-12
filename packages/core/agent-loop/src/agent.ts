@@ -16,9 +16,11 @@ import type {
   RequestErrorAction,
 } from '@deepseek-ai/dsh-agent'
 import { agentEvents, assembleContextFor } from '@deepseek-ai/dsh-agent'
+import { randomUUID } from 'node:crypto'
 import type { GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
 import {
   LlmError,
+  MessageId,
   createAssistantMessage,
   errorChain,
   markAgentLoopRequest,
@@ -130,7 +132,15 @@ export class ReactLoopAgent implements Agent {
     // Captured before the insertion so a reentrant cancel from a splice observer cannot reclassify it.
     const wakingAfterAbort = wakeup && this.phase.kind !== 'idle' && this.phase.abort.signal.aborted
     const resolvedTarget = wakingAfterAbort ? 'next-turn' : target
-    this.inbox.splice(resolvedTarget, Infinity, 0, [message])
+    const normalized: UserMessage = (message.id !== undefined && message.source !== undefined && message.role === 'user')
+      ? message
+      : {
+        ...message,
+        id: message.id ?? MessageId(randomUUID()),
+        role: 'user',
+        source: message.source ?? { kind: 'user' },
+      }
+    this.inbox.splice(resolvedTarget, Infinity, 0, [normalized])
     if (wakeup) this.wakeDriver(wakingAfterAbort)
   }
 

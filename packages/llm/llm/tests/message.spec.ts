@@ -96,4 +96,24 @@ describe('message construction', () => {
     expect(Object.isFrozen(message)).toBe(true)
     expect(Object.isFrozen(message.content[0])).toBe(true)
   })
+
+  it('defaults source to { kind: "user" } when omitted or undefined (Discussions #6451)', () => {
+    const withoutSource = createUserMessage({
+      content: [{ type: 'text', text: 'no source provided' }],
+    })
+    expect(withoutSource.source).toEqual({ kind: 'user' })
+    expect(Object.isFrozen(withoutSource.source)).toBe(true)
+
+    const withUndefinedSource = createUserMessage({
+      content: [{ type: 'text', text: 'explicit undefined source' }],
+      source: undefined,
+    })
+    expect(withUndefinedSource.source).toEqual({ kind: 'user' })
+
+    const withCustomSource = createUserMessage({
+      content: [{ type: 'text', text: 'custom plugin source' }],
+      source: { kind: 'plugin', plugin: 'my-plugin' },
+    })
+    expect(withCustomSource.source).toEqual({ kind: 'plugin', plugin: 'my-plugin' })
+  })
 })

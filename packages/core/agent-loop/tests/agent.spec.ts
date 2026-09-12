@@ -5,7 +5,7 @@ import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId, type UserMessage } from '@deepseek-ai/dsh-session'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { MockAdapter, textResponse } from './mock-adapter.ts'
@@ -165,5 +165,22 @@ describe('Agent', () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('agent event "agent/status" listener threw'),
     )
+  })
+
+  it('normalizes raw steer messages missing id and source without breaking tool execution (Discussions #6451)', async () => {
+    const ctx = await harness(new MockAdapter([textResponse('reply 1'), textResponse('reply 2')]))
+    const agent = await ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'start')
+    // Call steer with a raw unadorned message missing id and source (as a JS plugin would)
+    agent.steer({ content: [{ type: 'text', text: 'steered without source' }] } as unknown as UserMessage)
+    await agent.whenIdle()
+
+    expect(agent.status).toBe('idle')
+    const userEvents = agent.session.snapshotEvents().filter(e => e.type === 'user/message')
+    expect(userEvents).toHaveLength(2)
+    expect(userEvents[1]!.data.source).toEqual({ kind: 'user' })
+    expect(userEvents[1]!.data.id).toEqual(expect.any(String))
+    expect(userEvents[1]!.data.role).toBe('user')
   })
 })

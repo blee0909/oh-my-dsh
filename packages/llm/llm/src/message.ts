@@ -168,7 +168,10 @@ export interface ToolResultMessage extends Message {
 }
 
 type NewMessage = Omit<Message, 'id'>
-type NewUserMessage = Omit<UserMessage, 'id' | 'role'>
+type NewUserMessage = Omit<UserMessage, 'id' | 'role' | 'source'> & { readonly source?: MessageSource | undefined }
+type DefaultUserSource<S> = [Exclude<S, undefined>] extends [never]
+  ? { readonly kind: 'user' }
+  : Exclude<S, undefined>
 type NewAssistantMessage = Omit<AssistantMessage, 'id' | 'role' | 'source'> & {
   readonly source: Omit<ModelMessageSource, 'kind'> & { readonly kind?: never }
 }
@@ -198,14 +201,15 @@ export function createMessage<T extends NewMessage>(
 
 /**
  * Create one identified user-role message and freeze it before publication.
- * @param input - complete content and source for a new user message.
+ * @param input - complete content and optional source for a new user message.
  * @returns an immutable user message with a fresh stable identity.
  */
 export function createUserMessage<T extends NewUserMessage>(
   input: T & { readonly id?: never; readonly role?: never },
-): T & Pick<UserMessage, 'id' | 'role'> {
+): Omit<T, 'source'> & Pick<UserMessage, 'id' | 'role'> & { readonly source: DefaultUserSource<T['source']> } {
   return createMessage({
     ...input,
+    source: input.source ?? { kind: 'user' },
     role: 'user',
   })
 }
@@ -263,6 +267,6 @@ export function createToolResultMessage(input: ToolResultMessageInput): ToolResu
       toolCallId: input.callId,
       content: input.content,
       isError: input.isError,
-    }],
+    }] as [ToolResultBlock],
   })
 }

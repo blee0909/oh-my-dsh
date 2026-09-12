@@ -25,6 +25,8 @@ export interface TransformOptions {
   targetVendor?: string
   /** Whether to strip terminal error/aborted assistant turns */
   stripTerminalErrors?: boolean
+  /** Whether the adapter natively supports in-history system messages */
+  allowInHistorySystem?: boolean
 }
 
 export const FALLBACK_EMPTY_ASSISTANT_TEXT = '(thinking completed without explicit text)'
@@ -149,7 +151,7 @@ export function transformMessages(
 
     // 0. System messages
     if (msg.role === 'system') {
-      if (hasEncounteredDialogue) {
+      if (hasEncounteredDialogue && !_options.allowInHistorySystem) {
         // In-history system message: convert into user directive
         modified = true
         const text = extractTextFromBlocks(msg.content)

@@ -227,7 +227,7 @@ export function apply(ctx: Context, config: Config): void {
   // loop. Pure reset hook: always delegates (attaching nothing, vetoing
   // nothing).
   ctx.on('agent/pre-step', ({ agent, messages }, next): Promise<PreStepDecision> => {
-    if (messages.some(message => message.source.kind === 'user')) chains.delete(agent)
+    if (messages.some(message => message.source?.kind === 'user')) chains.delete(agent)
     return next()
   })
 }

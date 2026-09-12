@@ -23,7 +23,7 @@ const install: InvariantInstaller = Object.assign(function installWebhookMessage
     if (eventName !== 'session/event') return
     const [session, event] = args as [Session, SessionEvent]
     if (event.type !== 'agent/inbox/spliced') return
-    const webhookMessages = event.data.inserted.filter(message => message.source.kind === 'webhook')
+    const webhookMessages = event.data.inserted.filter(message => message.source?.kind === 'webhook')
     if (webhookMessages.length === 0) return
     const cwd = session.header.cwd
     if (cwd === undefined) return fail(`webhook Session "${session.id}" has no cwd`)

@@ -232,7 +232,7 @@ export function apply(ctx: Context, config: Config): void {
     ctx.on('agent/inbox/claimed', ({ agent, message }) => {
       // Claiming is the point the human's input actually enters a step; a notice
       // this plugin itself queued must not refill the budget it just spent.
-      if (message.source.kind === 'user') spentWakes.delete(agent)
+      if (message.source?.kind === 'user') spentWakes.delete(agent)
     })
   }
 

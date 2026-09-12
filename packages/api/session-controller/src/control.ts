@@ -184,7 +184,7 @@ function queueItemsFromInbox(inbox: InboxState): SessionQueuedItem[] {
     })),
     ...inbox['next-step'].map(message => ({
       id: message.id,
-      placement: message.source.kind === 'user' ? 'steering' as const : 'context' as const,
+      placement: message.source?.kind === 'user' ? 'steering' as const : 'context' as const,
       ...promptRpcId(message),
       message: { id: message.id, content: message.content as unknown as JsonValue[] },
     })),
@@ -194,7 +194,7 @@ function queueItemsFromInbox(inbox: InboxState): SessionQueuedItem[] {
 /** Prompt-RPC identity carried by a browser-submitted message's user source. */
 function promptRpcId(message: UserMessage): Pick<SessionQueuedItem, 'rpcId'> {
   const source = message.source
-  return source.kind === 'user' && 'rpcId' in source ? { rpcId: source.rpcId } : {}
+  return source?.kind === 'user' && 'rpcId' in source ? { rpcId: source.rpcId } : {}
 }
 
 function jobView(job: JobSnapshot): SessionJob {

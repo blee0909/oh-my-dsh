@@ -1062,7 +1062,10 @@ export class LlmRuntime extends TypertRemoteService {
         : Object.isFrozen(resolvedOptions)
           ? deepFreeze({ ...resolvedOptions, messages: projectedMessages as Message[] })
           : { ...resolvedOptions, messages: projectedMessages as Message[] }
-      const outboundMessages = transformMessages(projectedOptions.messages)
+      const adapterSystemPromptUpdate = (adapter as { systemPromptUpdate?: unknown }).systemPromptUpdate
+      const outboundMessages = transformMessages(projectedOptions.messages, {
+        allowInHistorySystem: adapterSystemPromptUpdate === 'in-history',
+      })
       const wireOptions = outboundMessages === projectedOptions.messages
         ? projectedOptions
         : Object.isFrozen(projectedOptions)

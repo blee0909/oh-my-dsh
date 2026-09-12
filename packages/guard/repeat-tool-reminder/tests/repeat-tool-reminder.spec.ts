@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { createUserMessage, ToolCallId  } from '@deepseek-ai/dsh-llm'
-import { SessionId, type SessionEvent } from '@deepseek-ai/dsh-session'
+import { SessionId, type SessionEvent, type UserMessage } from '@deepseek-ai/dsh-session'
 import { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
@@ -399,5 +399,15 @@ describe('config validation fails loud', () => {
     await expect(ctx.plugin(RepeatToolGuard, { argumentsPreviewChars: 0 })).rejects.toThrow(/argumentsPreviewChars/)
     const ctx2 = await spine()
     await expect(ctx2.plugin(RepeatToolGuard, { argumentsPreviewChars: 12.5 })).rejects.toThrow(/argumentsPreviewChars/)
+  })
+
+  it('does not throw when an incoming pre-step message lacks a source object (Discussions #6451)', async () => {
+    const ctx = await harness()
+    const badMessage = { role: 'user' as const, content: [{ type: 'text' as const, text: 'raw message without source' }] } as unknown as UserMessage
+    await expect(ctx.waterfall(
+      'agent/pre-step',
+      { agent: {} as unknown as Agent, messages: [badMessage], turn: 1, step: 1, signal: testToolSignal },
+      () => Promise.resolve({ kind: 'enter' as const, messages: [badMessage] }),
+    )).resolves.toEqual({ kind: 'enter', messages: [badMessage] })
   })
 })
