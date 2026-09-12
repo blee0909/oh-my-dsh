@@ -251,4 +251,34 @@ describe('ModelSelect reasoning effort', () => {
     expect(screen.queryByRole('button')).toBeNull()
     expect(load).not.toHaveBeenCalled()
   })
+
+  it('calls load with force: true when clicking the failure retry button', async () => {
+    const load = vi.fn()
+    const directory = createSnapshotStore<ModelDirectoryState>(state({
+      failures: [{ id: 'failed-provider', name: 'FailedProvider', message: 'offline' }],
+    }))
+    render(<ModelSelect
+      locked={false}
+      available
+      directory={directory}
+      load={load}
+      select={vi.fn().mockResolvedValue(true)}
+      t={t}
+    />)
+
+    // Open the dropdown
+    fireEvent.click(screen.getByRole('button', { name: /选择模型/ }))
+    expect(load).toHaveBeenCalledWith(false)
+
+    // Drill down to model pane
+    fireEvent.click(screen.getByRole('menuitem', { name: /模型/ }))
+
+    // Find and click the Retry button on the warning banner
+    const retryButton = screen.getByRole('button', { name: '重试' })
+    expect(retryButton).toBeTruthy()
+    fireEvent.click(retryButton)
+
+    // Verify load(true) was called
+    expect(load).toHaveBeenCalledWith(true)
+  })
 })

@@ -106,9 +106,9 @@ export function ModelSelect(
     ], [reasoning, t])
   const busy = state.status === 'selecting'
 
-  const reload = (): void => {
+  const reload = (force = false): void => {
     lastActionRef.current = 'load'
-    load()
+    load(force)
   }
 
   useEffect(() => {
@@ -322,13 +322,13 @@ export function ModelSelect(
               {state.error !== null && lastActionRef.current === 'load' && (
                 <div className={css.error}>
                   <span>{t('error.action', { message: state.error })}</span>
-                  <button type="button" className={css.retry} onClick={reload}>{t('retry')}</button>
+                  <button type="button" className={css.retry} onClick={() => { reload(true) }}>{t('retry')}</button>
                 </div>
               )}
               {state.failures.map(failure => (
                 <div className={css.warning} key={failure.id}>
                   <span>{t('warning.groupLoad', { name: failure.name, message: failure.message })}</span>
-                  <button type="button" className={css.retry} onClick={reload}>{t('retry')}</button>
+                  <button type="button" className={css.retry} onClick={() => { reload(true) }}>{t('retry')}</button>
                 </div>
               ))}
               <div className={clsx(css.groups, 'scrollable')}>
@@ -375,7 +375,7 @@ export function ModelSelect(
               {state.error !== null && lastActionRef.current === 'load' && (
                 <div className={css.error}>
                   <span>{t('error.action', { message: state.error })}</span>
-                  <button type="button" className={css.retry} onClick={reload}>{t('action.reload')}</button>
+                  <button type="button" className={css.retry} onClick={() => { reload(true) }}>{t('action.reload')}</button>
                 </div>
               )}
               {effortChoices.length === 0

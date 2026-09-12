@@ -31,11 +31,16 @@ export class ModelCatalogDirectory {
 
   /**
    * Return the current generation's catalog, sharing its one in-flight load.
+   * @param force - whether to invalidate cached value and force reload from Host.
    * @returns the loaded global catalog.
    */
-  load(): Promise<ModelCatalog> {
-    const state = this.store.getSnapshot()
-    if (state.status === 'ready' && state.value !== null) return Promise.resolve(state.value)
+  load(force = false): Promise<ModelCatalog> {
+    if (force) {
+      this.invalidate()
+    } else {
+      const state = this.store.getSnapshot()
+      if (state.status === 'ready' && state.value !== null) return Promise.resolve(state.value)
+    }
     if (this.inflight !== undefined) return this.inflight
     const generation = this.generation
     this.store.update((draft) => {
@@ -69,7 +74,7 @@ export class ModelCatalogDirectory {
    * Invalidate the loaded catalog; the next explicit menu read reloads it.
    * @param clear - whether values from the previous Host generation must be hidden.
    */
-  private invalidate(clear = false): void {
+  invalidate(clear = false): void {
     this.generation += 1
     this.inflight = undefined
     const value = clear ? null : this.store.getSnapshot().value

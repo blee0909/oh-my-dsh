@@ -70,11 +70,12 @@ export class ModelDirectory {
 
   /**
    * Ensure the Host generation's shared advisory catalog is loaded.
+   * @param force - whether to bypass cache and force reload from Host.
    * @returns the fresh directory value.
    */
-  async load(): Promise<ModelDirectoryState> {
+  async load(force = false): Promise<ModelDirectoryState> {
     this.assertAvailable()
-    await this.catalog.load()
+    await this.catalog.load(force)
     this.syncInputs()
     return this.store.getSnapshot()
   }

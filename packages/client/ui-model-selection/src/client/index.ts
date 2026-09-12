@@ -183,8 +183,8 @@ export function apply(ctx: ClientContext): void {
         return {
           available,
           directory: directory.store,
-          load: () => {
-            if (available) directory.load().catch(() => { /* surfaced on the store */ })
+          load: (force = false) => {
+            if (available) directory.load(force).catch(() => { /* surfaced on the store */ })
           },
           select: (selection: ModelSelection) => available
             ? directory.select(selection).then(() => true, () => false)

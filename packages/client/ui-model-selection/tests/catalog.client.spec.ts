@@ -92,4 +92,40 @@ describe('ModelCatalogDirectory', () => {
       })
     })
   })
+
+  it('forces a fresh request when load is called with force: true on a ready catalog with failures', async () => {
+    const models = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          ...catalog('cached'),
+          failures: [{ id: 'third-party', name: 'ThirdParty', message: 'connection refused' }],
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          default: { provider: 'fixture', model: 'cached' },
+          routableProviders: ['fixture', 'third-party'],
+          groups: [
+            { id: 'fixture', name: 'Fixture', models: [{ id: 'cached', name: 'cached' }] },
+            { id: 'third-party', name: 'ThirdParty', models: [{ id: 'tp-model', name: 'tp-model' }] },
+          ],
+          failures: [],
+        },
+      })
+    const subject = directory(models)
+
+    // Initial load returns catalog with failure
+    await expect(subject.load()).resolves.toMatchObject({ failures: [{ id: 'third-party' }] })
+    expect(models).toHaveBeenCalledTimes(1)
+
+    // Normal load() reuses cached ready catalog (reproducing the bug: retry is no-op)
+    await expect(subject.load()).resolves.toMatchObject({ failures: [{ id: 'third-party' }] })
+    expect(models).toHaveBeenCalledTimes(1)
+
+    // Force reload forces a fresh request to Host and recovers
+    await expect(subject.load(true)).resolves.toMatchObject({ failures: [] })
+    expect(models).toHaveBeenCalledTimes(2)
+  })
 })
