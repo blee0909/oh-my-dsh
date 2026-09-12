@@ -301,4 +301,27 @@ describe('sessions.fork', () => {
     })
     await ctx.fiber.dispose()
   })
+
+  it('does not sweep inter-turn agent/inbox/spliced into the child seed (#6262)', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-inbox-leak', 1)
+    source.append('agent/inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [createUserMessage({
+        content: [{ type: 'text', text: 'turn 2 queued prompt' }],
+        source: { kind: 'user' },
+      })],
+    } as never)
+    const response = await remote(ctx).fork(request({ sessionId: source.id, atSeq: 1 }))
+    expect(response.ok).toBe(true)
+    if (!response.ok) return
+    const child = ctx.sessions.get(response.value.sessionId)
+    const childEventTypes = child?.snapshotEvents().map(e => e.type) ?? []
+    expect(childEventTypes.includes('agent/inbox/spliced')).toBe(false)
+    expect(childEventTypes).toEqual([
+      'turn/start', 'user/message', 'turn/end', 'session/end-seed',
+    ])
+    await ctx.fiber.dispose()
+  })
 })
