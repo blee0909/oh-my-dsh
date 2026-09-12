@@ -12,7 +12,7 @@ import ToolRuntime from '@deepseek-ai/dsh-tools'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { PostToolDecision } from '@deepseek-ai/dsh-tools'
 import { publicToolName, syncTools, type ToolBridgeOptions } from '@deepseek-ai/dsh-mcp-client/src/tools.ts'
-import { createTransport } from '@deepseek-ai/dsh-mcp-client/src/transport.ts'
+import { buildChildEnv, createTransport, expandEnvValue } from '@deepseek-ai/dsh-mcp-client/src/transport.ts'
 import type { Config } from '@deepseek-ai/dsh-mcp-client'
 
 const testToolSignal = new AbortController().signal
@@ -1278,6 +1278,40 @@ describe('createTransport', () => {
     }
     const transport = createTransport(config)
     expect(transport).toBeDefined()
+  })
+
+  it('expands ${VAR} and $VAR placeholders in explicit env values against process.env (#6075)', () => {
+    const env = {
+      TOKEN: 'secret-token-value',
+      USER_NAME: 'alice',
+      BASE_URL: 'https://api.example.com',
+    }
+
+    expect(expandEnvValue('${TOKEN}', env)).toBe('secret-token-value')
+    expect(expandEnvValue('$TOKEN', env)).toBe('secret-token-value')
+    expect(expandEnvValue('Bearer ${TOKEN}', env)).toBe('Bearer secret-token-value')
+    expect(expandEnvValue('${BASE_URL}/v1/${USER_NAME}', env)).toBe('https://api.example.com/v1/alice')
+    expect(expandEnvValue('${UNSET_VAR}', env)).toBe('')
+    expect(expandEnvValue('$UNSET_VAR', env)).toBe('')
+    expect(expandEnvValue('plain-text', env)).toBe('plain-text')
+    expect(expandEnvValue(123 as never, env)).toBe('123')
+  })
+
+  it('expands explicit env placeholders in buildChildEnv and preserves deliberately supplied credentials (#6075)', () => {
+    const customEnv = {
+      ...process.env,
+      GITHUB_PERSONAL_ACCESS_TOKEN: 'ghp_test_1234567890',
+      CUSTOM_PORT: '8080',
+    }
+    const result = buildChildEnv({
+      GITHUB_PERSONAL_ACCESS_TOKEN: '${GITHUB_PERSONAL_ACCESS_TOKEN}',
+      PORT: '$CUSTOM_PORT',
+      STATIC: 'fixed',
+    }, customEnv)
+
+    expect(result.GITHUB_PERSONAL_ACCESS_TOKEN).toBe('ghp_test_1234567890')
+    expect(result.PORT).toBe('8080')
+    expect(result.STATIC).toBe('fixed')
   })
 })
 

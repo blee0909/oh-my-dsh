@@ -13,13 +13,33 @@ import { scrubbedParentEnv } from '@deepseek-ai/dsh-subprocess'
 import type { Config } from './index.ts'
 
 /**
- * The subprocess seam's scrubbed parent env (credential-shaped and stale
- * `DSH_*` names dropped), plus the spec's explicit env. The MCP SDK owns the
- * actual spawn, so this transport shares the scrub definition rather than the
- * spawn path.
+ * Expand shell-style variable references (${VAR} and $VAR) against the harness
+ * process environment (Discussions #6075). Unset variables expand to empty string.
  */
-function buildChildEnv(extra: Record<string, string>): Record<string, string> {
-  return { ...scrubbedParentEnv(), ...extra }
+export function expandEnvValue(value: unknown, env: NodeJS.ProcessEnv = process.env): string {
+  if (typeof value !== 'string') return String(value ?? '')
+  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)/g, (_, braced, bare) => {
+    const key = braced ?? bare
+    return env[key] ?? ''
+  })
+}
+
+/**
+ * The subprocess seam's scrubbed parent env (credential-shaped and stale
+ * `DSH_*` names dropped), plus the spec's explicit env with `${VAR}` and `$VAR`
+ * placeholders expanded against `process.env` (Discussions #6075). The MCP SDK
+ * owns the actual spawn, so this transport shares the scrub definition rather
+ * than the spawn path.
+ */
+export function buildChildEnv(
+  extra: Record<string, string>,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const expandedExtra: Record<string, string> = {}
+  for (const [key, value] of Object.entries(extra)) {
+    expandedExtra[key] = expandEnvValue(value, env)
+  }
+  return { ...scrubbedParentEnv(), ...expandedExtra }
 }
 
 /**
