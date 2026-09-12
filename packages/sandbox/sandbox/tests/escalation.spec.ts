@@ -84,10 +84,21 @@ describe('approveEscalation', () => {
   it('a non-widening request fails closed with its own text and never asks', async () => {
     const seen: unknown[] = []
     const spy = ingredients({ approver: approver('allowed-once', r => seen.push(r)) })
-    await expect(approveEscalation(req({ requestedMode: 'read-only' }), spy))
-      .rejects.toThrow(/not strictly wider than this call's current "read-only" mode/)
-    await expect(approveEscalation(req({ requestedMode: 'workspace-write', effectiveMode: 'danger-full-access' as never }), spy))
-      .rejects.toThrow(/not strictly wider/)
+    await expect(approveEscalation(req({ requestedMode: 'read-only' }), spy)).rejects.toThrow(
+      new RegExp(
+        'not strictly wider than this call\'s current "read-only" mode; '
+        + 'nothing ran, so retry this command without sandbox_permissions and justification',
+      ),
+    )
+    await expect(approveEscalation(
+      req({ requestedMode: 'workspace-write', effectiveMode: 'danger-full-access' as never, subject: 'operation' }),
+      spy,
+    )).rejects.toThrow(
+      new RegExp(
+        'not strictly wider than this call\'s current "danger-full-access" mode; '
+        + 'nothing ran, so retry this operation without sandbox_permissions and justification',
+      ),
+    )
     expect(seen).toEqual([])
   })
 

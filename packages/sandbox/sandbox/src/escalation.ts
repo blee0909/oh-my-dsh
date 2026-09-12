@@ -160,7 +160,10 @@ export async function approveEscalation<A, C>(request: EscalationRequest, approv
   // deliberately not a schema constraint (the enum is the closed target
   // vocabulary; the effective mode is per-call truth).
   if (!(WIDER_MODES[effectiveMode] ?? []).includes(mode as SandboxMode)) {
-    throw new Error(`sandbox escalation to "${mode}" is not strictly wider than this call's current "${effectiveMode}" mode`)
+    throw new Error(
+      `sandbox escalation to "${mode}" is not strictly wider than this call's current "${effectiveMode}" mode; `
+      + `nothing ran, so retry this ${subject} without sandbox_permissions and justification`,
+    )
   }
   if (approval.approver === undefined) {
     throw new Error(`sandbox escalation to "${mode}" requires approval, but no approval service is composed`)
