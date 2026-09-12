@@ -342,6 +342,32 @@ function normalizeLegacyErrorReason(
   }
 }
 
+const KNOWN_SOURCE_KINDS = new Set([
+  'user', 'plugin', 'model', 'tool', 'agent-instructions',
+  'session-reference', 'team-message', 'goal', 'skill-invocation',
+  'skill-catalog', 'coordinator', 'subagent-report', 'subagent-settled',
+  'webhook', 'agent-message',
+])
+
+function normalizeLegacyMessageSource(source: Record<string, SessionFormatJsonValue>): Record<string, SessionFormatJsonValue> {
+  const kind = source['kind']
+  let normalized = source
+  if (typeof kind === 'string' && !KNOWN_SOURCE_KINDS.has(kind)) {
+    const plugin = typeof source['plugin'] === 'string' ? source['plugin'] : kind
+    const form = typeof source['form'] === 'string' ? source['form'] : undefined
+    normalized = {
+      kind: 'plugin',
+      plugin,
+      ...(form !== undefined ? { form } : {}),
+    }
+  }
+  if (normalized['kind'] === 'plugin' && normalized['form'] !== 'notice' && Object.hasOwn(normalized, 'summary')) {
+    const { summary: _ignored, ...rest } = normalized
+    normalized = rest
+  }
+  return normalized
+}
+
 function normalizeLegacyMessage(
   event: SessionFormatEvent,
   sessionId: string,
@@ -349,18 +375,55 @@ function normalizeLegacyMessage(
 ): SessionFormatEvent {
   const data = releasedV0Record(event.data, `${event.type} ${event.seq} data`)
   switch (event.type) {
-    case 'user/message':
-      if (Object.hasOwn(data, 'id') || Object.hasOwn(data, 'role')
-        || Object.hasOwn(data, 'message') || !Object.hasOwn(data, 'content')
-        || !Object.hasOwn(data, 'source')) return event
-      return {
-        ...event,
-        data: {
+    case 'user/message': {
+      let messageData = data
+      if (!Object.hasOwn(data, 'id') && !Object.hasOwn(data, 'role')
+        && !Object.hasOwn(data, 'message') && Object.hasOwn(data, 'content')
+        && Object.hasOwn(data, 'source')) {
+        messageData = {
           ...data,
           id: legacyMessageId(sessionId, event.seq),
           role: 'user',
-        },
+        }
       }
+      if (releasedIsRecord(messageData['source'])) {
+        const cleaned = normalizeLegacyMessageSource(messageData['source'])
+        if (cleaned !== messageData['source']) {
+          messageData = { ...messageData, source: cleaned }
+        }
+      }
+      return messageData === data ? event : { ...event, data: messageData }
+    }
+    case 'agent/inbox/spliced': {
+      const inserted = data['inserted']
+      if (!Array.isArray(inserted)) return event
+      let modified = false
+      const normalizedInserted = inserted.map((item, idx) => {
+        if (!releasedIsRecord(item)) return item
+        let rec = item
+        if (!Object.hasOwn(rec, 'id')) {
+          rec = { ...rec, id: `${legacyMessageId(sessionId, event.seq)}-${idx}` }
+          modified = true
+        }
+        if (!Object.hasOwn(rec, 'role')) {
+          rec = { ...rec, role: 'user' }
+          modified = true
+        }
+        if (typeof rec['content'] === 'string') {
+          rec = { ...rec, content: [{ type: 'text', text: rec['content'] }] }
+          modified = true
+        }
+        if (releasedIsRecord(rec['source'])) {
+          const cleaned = normalizeLegacyMessageSource(rec['source'])
+          if (cleaned !== rec['source']) {
+            rec = { ...rec, source: cleaned }
+            modified = true
+          }
+        }
+        return rec
+      })
+      return modified ? { ...event, data: { ...data, inserted: normalizedInserted } } : event
+    }
     case 'assistant/message': {
       if (Object.hasOwn(data, 'message')
         || !Object.hasOwn(data, 'content') || !Object.hasOwn(data, 'provenance')) return event

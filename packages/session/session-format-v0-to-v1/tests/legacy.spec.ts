@@ -292,4 +292,60 @@ describe('released v0 legacy normalization', () => {
       data: { title: 'Pinned', messageSeqs: [1], source: { kind: 'user' } },
     }])).toThrow(/empty exactly/)
   })
+
+  it('normalizes legacy plugin-injected message sources and spliced message shapes (Discussions #6355)', () => {
+    const turn = { type: 'turn/start', seq: 0, time: 1, data: { turn: 1 } }
+    const legacyPluginMsg = {
+      type: 'user/message', seq: 1, time: 2, surfaceOp: 'append',
+      data: {
+        id: 'msg-legacy-plugin',
+        role: 'user',
+        content: [{ type: 'text', text: 'plugin instructions' }],
+        source: {
+          kind: 'plugin',
+          plugin: 'test-plugin',
+          form: 'instructions',
+          summary: 'deprecated summary on non-notice form',
+        },
+      },
+    }
+    const legacySpliced = {
+      type: 'agent/inbox/spliced', seq: 2, time: 3,
+      data: {
+        target: 'next-turn',
+        start: 0,
+        inserted: [
+          {
+            content: 'bare string text without role',
+            source: {
+              kind: 'at-file-mention',
+              file: 'README.md',
+            },
+          },
+        ],
+      },
+    }
+    const turnEnd = { type: 'turn/end', seq: 3, time: 4, data: { turn: 1, reason: { kind: 'completed' } } }
+
+    const events = migrate([turn, legacyPluginMsg, legacySpliced, turnEnd]).events
+    // 1. Check legacy plugin message source has summary safely cleaned
+    const userEvent = events[1]
+    const userData = userEvent?.data as Record<string, unknown> | undefined
+    expect(userData?.['source']).toEqual({
+      kind: 'plugin',
+      plugin: 'test-plugin',
+      form: 'instructions',
+    })
+    expect(userData?.['source']).not.toHaveProperty('summary')
+
+    // 2. Check spliced message has backfilled id, role: 'user', array content, and normalized source
+    const splicedEvent = events[2]
+    const splicedData = splicedEvent?.data as Record<string, unknown> | undefined
+    const inserted = splicedData?.['inserted'] as readonly Record<string, unknown>[]
+    expect(inserted).toHaveLength(1)
+    expect(inserted[0]?.['id']).toBe('legacy-message:legacy:2-0')
+    expect(inserted[0]?.['role']).toBe('user')
+    expect(inserted[0]?.['content']).toEqual([{ type: 'text', text: 'bare string text without role' }])
+    expect(inserted[0]?.['source']).toEqual({ kind: 'plugin', plugin: 'at-file-mention' })
+  })
 })

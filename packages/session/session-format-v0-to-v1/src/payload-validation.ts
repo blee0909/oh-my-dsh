@@ -555,7 +555,7 @@ function messageSourceValue(
       if (source['clientTimeZone'] !== undefined) nonEmptyString(source['clientTimeZone'], `${label} clientTimeZone`)
       return
     case 'plugin':
-      pluginSourceValue(source, label)
+      pluginSourceValue(source, label, version)
       return
     case 'model':
       assertReleasedV0Keys(source, ['kind', 'provider', 'model'], ['replayState'], label)
@@ -632,7 +632,7 @@ function messageSourceValue(
   }
 }
 
-function pluginSourceValue(source: JsonRecord, label: string): void {
+function pluginSourceValue(source: JsonRecord, label: string, version: number): void {
   const optional = ['form', 'sections', 'summary']
   if (source['plugin'] === 'compact') optional.push('compactionId', 'sourceCommandId')
   assertReleasedV0Keys(source, ['kind', 'plugin'], optional, label)
@@ -653,8 +653,12 @@ function pluginSourceValue(source: JsonRecord, label: string): void {
   } else if (source['sections'] !== undefined) {
     throw new SessionFormatError(`${label} sections require snapshot form`)
   }
-  if (form === 'notice') stringValue(source['summary'], `${label} summary`)
-  else if (source['summary'] !== undefined) throw new SessionFormatError(`${label} summary requires notice form`)
+  if (form === 'notice') {
+    stringValue(source['summary'], `${label} summary`)
+  } else if (source['summary'] !== undefined) {
+    if (version > 0) throw new SessionFormatError(`${label} summary requires notice form`)
+    stringValue(source['summary'], `${label} summary`)
+  }
 }
 
 function sessionReferenceSourceValue(source: JsonRecord, label: string, version: number): void {
