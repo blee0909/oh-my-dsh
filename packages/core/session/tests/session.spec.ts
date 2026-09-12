@@ -1797,4 +1797,23 @@ describe('SessionStore', () => {
 
     expect(heard).toEqual([session])
   })
+
+  it('exposes backward-compatible events array and iterator for legacy callers (#6356)', () => {
+    const session = Session.create(SessionId('backward-compat-events'))
+    session.append('turn/start', { turn: 1 })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+
+    // oxlint-disable-next-line typescript/no-deprecated -- Verifying backward compatibility getter.
+    const events = session.events
+    expect(events).toBeDefined()
+    expect(Array.isArray(events)).toBe(true)
+    expect(Object.isFrozen(events)).toBe(true)
+    expect(events.map(e => e.type)).toEqual(['turn/start', 'turn/end'])
+
+    const iterated: string[] = []
+    for (const event of session) {
+      iterated.push(event.type)
+    }
+    expect(iterated).toEqual(['turn/start', 'turn/end'])
+  })
 })

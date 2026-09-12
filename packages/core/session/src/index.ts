@@ -652,6 +652,24 @@ export class Session {
   }
 
   /**
+   * Return an immutable full snapshot of the session event log.
+   * Preserved for backward compatibility with external/legacy callers and plugins.
+   * @deprecated Existing logic may remain unmigrated for now, but new calls should use `snapshotEvents()`.
+   * @returns an immutable snapshot of all events in log order.
+   */
+  get events(): readonly SessionEvent[] {
+    // oxlint-disable-next-line typescript/no-deprecated -- Preserved for backward compatibility with external/legacy callers.
+    return this.snapshotEvents()
+  }
+
+  /**
+   * Provide an iterator over the session events in log order.
+   */
+  [Symbol.iterator](): Iterator<SessionEvent> {
+    return this.log[Symbol.iterator]()
+  }
+
+  /**
    * Return this Session's events after its fork-inherited prefix.
    * @deprecated Existing logic may remain unmigrated for now, but new calls are prohibited.
    * See the [Agent Note](../../../../.agents/notes/implemented/architecture/2026-09-09-deprecate-synchronous-session-event-reads.md).
