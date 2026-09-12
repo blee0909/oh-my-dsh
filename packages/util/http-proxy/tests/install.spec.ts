@@ -1,13 +1,14 @@
 import { spawnSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterEach, beforeAll, afterAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, afterAll, describe, expect, it, vi } from 'vitest'
 import { getGlobalDispatcher } from 'undici'
 import {
   clearedProxyEnv,
   installProxyFromEnvironment,
   proxyEnvironmentForChild,
   proxyRouteFor,
+  recycleGlobalDispatcher,
 } from '../src/index.ts'
 import { PROXY_ENV_NAMES } from '../src/policy.ts'
 
@@ -454,5 +455,50 @@ describe('clearedProxyEnv', () => {
     const cleared = clearedProxyEnv()
     expect(Object.keys(cleared).sort()).toEqual([...PROXY_ENV_NAMES].sort())
     expect(Object.values(cleared).every(value => value === undefined)).toBe(true)
+  })
+})
+
+describe('recycleGlobalDispatcher', () => {
+  it('keeps proxy routing after replacing the dispatcher', async () => {
+    const { dispose } = await install(proxyAll())
+    try {
+      const before = getGlobalDispatcher()
+      await recycleGlobalDispatcher()
+      const after = getGlobalDispatcher()
+      expect(after).not.toBe(before)
+      expect(proxyRouteFor(new URL(proxyTarget))).toMatchObject({ proxied: true, proxy: proxyUrl, dispatcher: after })
+      await expect((await fetch(proxyTarget)).text()).resolves.toBe('VIA-PROXY')
+      await expect((await fetch(originUrl)).text()).resolves.toBe('DIRECT')
+    } finally {
+      await dispose()
+    }
+  })
+
+  it('replaces the default dispatcher when nothing is installed', async () => {
+    const before = getGlobalDispatcher()
+    await recycleGlobalDispatcher()
+    expect(getGlobalDispatcher()).not.toBe(before)
+  })
+
+  it('lets a layered direct install dispose after recycle', async () => {
+    const outer = await install(proxyAll())
+    const inner = await install(env({}))
+    try {
+      await recycleGlobalDispatcher()
+    } finally {
+      await inner.dispose()
+      await outer.dispose()
+    }
+  })
+
+  it('swallows dispatcher.close rejection', async () => {
+    const undici = await import('undici')
+    const close = vi.spyOn(undici.Agent.prototype, 'close').mockRejectedValue(new Error('already closed'))
+    try {
+      await recycleGlobalDispatcher()
+      expect(close).toHaveBeenCalled()
+    } finally {
+      close.mockRestore()
+    }
   })
 })

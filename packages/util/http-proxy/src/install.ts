@@ -202,7 +202,9 @@ async function installGlobalProxy(policy: ProxyPolicy): Promise<() => Promise<vo
       active = previousPolicy
       installed = previousInstalled
       restoreEnv?.()
-      await direct.close()
+      await direct.close().catch(() => {
+        // Recycle may already have closed this dispatcher.
+      })
     }
   }
   const restoreEnv = applyPolicyEnv(policy)
@@ -218,7 +220,9 @@ async function installGlobalProxy(policy: ProxyPolicy): Promise<() => Promise<vo
     active = previousPolicy
     installed = previousInstalled
     restoreEnv()
-    await agent.close()
+    await agent.close().catch(() => {
+      // Recycle may already have closed this dispatcher.
+    })
   }
 }
 
@@ -300,6 +304,30 @@ export async function installProxyFromEnvironment(
   const { policy, diagnostics } = resolveProxyPolicy(env)
   for (const diagnostic of diagnostics) report(diagnostic.message)
   return await installGlobalProxy(policy)
+}
+
+/**
+ * Replace the process `fetch` dispatcher, keeping the installed proxy policy.
+ *
+ * undici keeps HTTP/2 sessions in the current dispatcher. After the process loses a local address,
+ * pooled sockets stay `CLOSED` and every retry reuses them. Closing that dispatcher and installing
+ * a replacement with the same policy lets the next `fetch` open a new session without dropping
+ * proxy routing.
+ *
+ * A caller abort must not call this: cancelling a request is not a dead pool.
+ */
+export async function recycleGlobalDispatcher(): Promise<void> {
+  const undici = await import('undici')
+  const previous = undici.getGlobalDispatcher()
+  const policy = active
+  const next = policy !== undefined && policy.source !== 'none'
+    ? await createPolicyDispatcher(policy)
+    : new undici.Agent()
+  undici.setGlobalDispatcher(next)
+  installed = policy !== undefined && policy.source !== 'none' ? next : undefined
+  await previous.close().catch(() => {
+    // A close error cannot restore the retired dispatcher; the replacement is already live.
+  })
 }
 
 /**

@@ -4,6 +4,7 @@ import { attributionHeaders, LlmError } from '@deepseek-ai/dsh-llm'
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { DeepSeekFileId } from './file-id.ts'
 import type { DeepSeekFileId as DeepSeekFileIdType } from './file-id.ts'
+import { deepSeekFetch } from './transport.ts'
 
 /** Minimum provider-supported file lifetime. */
 export const MIN_FILE_EXPIRY_SECONDS = 3_600
@@ -136,7 +137,7 @@ export class DeepSeekFilesClient {
   constructor(options: FilesApiOptions) {
     this.baseURL = options.baseURL.replace(/\/+$/u, '')
     this.apiKey = options.apiKey
-    this.fetchImpl = options.fetch ?? globalThis.fetch
+    this.fetchImpl = options.fetch ?? deepSeekFetch
   }
 
   private async request(path: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {

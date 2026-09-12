@@ -43,6 +43,7 @@ import { DeepSeekFileStore } from './file-store.ts'
 import type { DeepSeekFilePolicy } from './file-store.ts'
 import type { DeepSeekFileId } from './file-id.ts'
 import { parseSse } from './sse.ts'
+import { deepSeekFetch } from './transport.ts'
 import { translate } from './translate.ts'
 import type { WireError, WireRequest } from './types.ts'
 
@@ -648,7 +649,7 @@ export class DeepSeekAdapter extends LlmAdapter {
       // outweighs its additional runtime dependencies.
       let response: Response
       try {
-        response = await fetch(`${connection.baseURL}/chat/completions`, {
+        response = await deepSeekFetch(`${connection.baseURL}/chat/completions`, {
           method: 'POST',
           headers,
           body: payload,
