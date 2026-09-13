@@ -158,7 +158,7 @@
   flex: none;
   gap: 4px;
   align-items: center;
-  height: 28px;
+  height: 38px;
   padding: 10px 6px 0 10px;
   touch-action: none;
 }
@@ -297,17 +297,10 @@
   mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
 }
 
-/* While the close shows, the title is gone under the close's circle and fades
-   out over the 16px before it: the circle spans the chip's last 24px and the
-   title ends 10px inside the chip, so the title's last 14px are under it.
-   Later than the clipped mask, so a clipped chip showing its close fades
-   under the close. A floating panel's header chip has no close, so it keeps
-   the clipped mask alone. */
-.tab:not(.floatTitle):hover .tabTitle,
-.tab:not(.floatTitle):focus-within .tabTitle,
-.tabActive .tabTitle {
-  mask-image: linear-gradient(to right, black calc(100% - 30px), transparent calc(100% - 14px));
+.tab:has(.tabClose) {
+  padding-right: 28px;
 }
+
 
 /* A 20px icon button inset 4px from the chip's end, holding a 14px glyph in
    the tertiary ink, so it sits back from the title beside it. */

@@ -1491,6 +1491,17 @@ describe('surface chrome', () => {
     expect(strip?.querySelectorAll('[data-dockkit-strip-tabs] [data-dockkit-tab]')).toHaveLength(2)
     expect(strip?.querySelectorAll(':scope > [data-dockkit-tab]')).toHaveLength(0)
   })
+
+  it('renders tabStrip with closable tabs and tabClose controls (Discussions #6474)', () => {
+    const controller = seededController()
+    renderSurface(controller, spyIntents())
+    const strip = document.querySelector('[data-dockkit-strip]')
+    expect(strip).not.toBeNull()
+    const tab = document.querySelector('[data-dockkit-tab]')
+    expect(tab).not.toBeNull()
+    const closeBtn = document.querySelector('[data-dockkit-tab-close]')
+    expect(closeBtn).not.toBeNull()
+  })
 })
 
 describe('a controller satisfies the intent contract', () => {
