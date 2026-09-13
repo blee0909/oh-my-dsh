@@ -42,8 +42,9 @@ export function restoreReleasedV3Artifact(artifact: SessionFormatArtifact, known
       const operation = event['surfaceOp']
       if (hasSurface && head === undefined) throw new SessionFormatError('system/message requires a protected first surface head')
       if (operation === 'append') {
-        if (!hasSurface) head = event.seq
+        if (head === undefined) head = event.seq
       } else {
+        if (head === undefined) throw new SessionFormatError('system/message requires a protected first surface head')
         const replace = record(operation, 'system replacement')
         if (replace['startSeq'] === head || replace['endSeq'] === head) {
           if (replace['startSeq'] !== head || replace['endSeq'] !== head) {
@@ -63,7 +64,7 @@ export function restoreReleasedV3Artifact(artifact: SessionFormatArtifact, known
         throw new SessionFormatError('compaction cannot shadow the protected system head')
       }
     }
-    if (SURFACE_TYPES.has(event.type)) hasSurface = true
+    if (SURFACE_TYPES.has(event.type) && step !== undefined) hasSurface = true
     const projected = relationshipEvent(event)
     if (!SURFACE_TYPES.has(event.type) || event['surfaceOp'] === 'append') return projected
     const replacement = event['surfaceOp'] as { readonly startSeq: number; readonly endSeq: number }

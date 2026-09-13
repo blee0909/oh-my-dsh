@@ -66,6 +66,17 @@ describe('durable V3 admission failures', () => {
     expect(() => native([...opening, event('user/message', user, { surfaceOp: 'append' }), event('system/message', system, { surfaceOp: 'append' })])).toThrow(/protected first/)
   })
 
+  it('accepts pre-step durable surface appends before step/start (Discussions #6468)', () => {
+    const preStepUser = event('user/message', user, { surfaceOp: 'append' })
+    const artifact = native([
+      event('turn/start', { turn: 1 }),
+      preStepUser,
+      event('step/start', { turn: 1, step: 1 }),
+      event('system/message', system, { surfaceOp: 'append' }),
+    ])
+    expect(artifact.events).toHaveLength(4)
+  })
+
   it('rejects ordinary replacements that consume the protected head', () => {
     expect(() => native([...opening, event('system/message', system, { surfaceOp: 'append' }), event('user/message', user, { surfaceOp: { op: 'replace', startSeq: 2, endSeq: 2 }, sourceEventSeqs: [2] })])).toThrow(/protected/)
   })
