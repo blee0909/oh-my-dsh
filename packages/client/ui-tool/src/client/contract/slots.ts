@@ -4,7 +4,7 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-slots'
 import type { RemoteHostFacts } from '@deepseek-ai/dsh-api-remotes/client'
 import type { OpenFileOptions, ToolCallBlock } from '@deepseek-ai/dsh-client-ui-chat/client'
-import type { MessageImageLoader, MessageImageSource } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { MessageImageLoader, MessageImageSource, RenderMessageImages } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -76,6 +76,12 @@ export interface ToolCallOwnerProps {
    * authorization.
    */
   loadImage: MessageImageLoader
+  /**
+   * Slot-backed message images renderer supplied by the chat node. Used by
+   * fallback views (e.g. GenericToolCard) to render image attachments without
+   * needing an exclusive tool.call.images child slot declaration.
+   */
+  renderMessageImages?: RenderMessageImages | undefined
   /** Inspect this call in the trajectory view when available. */
   inspect?: (() => void) | undefined
 }

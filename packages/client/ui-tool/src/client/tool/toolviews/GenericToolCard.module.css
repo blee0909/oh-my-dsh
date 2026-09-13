@@ -1,0 +1,10 @@
+.images {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 6px 0 2px 24px;
+}
+
+.imageItem {
+  display: flex;
+}

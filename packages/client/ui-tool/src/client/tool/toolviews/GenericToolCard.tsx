@@ -8,8 +8,10 @@ import { diffCardModel } from '../models/diff-card-model.ts'
 import { searchCardModel } from '../models/search-card-model.ts'
 import { terminalCardModel, terminalFailed } from '../models/terminal-card-model.ts'
 import { webCardModel } from '../models/web-card-model.ts'
+import { resultImageCard } from '../models/image-card-model.ts'
 import { toolRowModel, type ToolRowVariant } from '../models/tool-call-model.ts'
 import { ToolRow } from '../components/ToolRow.tsx'
+import css from './GenericToolCard.module.css'
 
 /** Variant leading icons (figma table); all glyphs render at 14 inside the 16px leading box. */
 const VARIANT_ICONS: Record<ToolRowVariant, ReactNode> = {
@@ -27,42 +29,62 @@ export interface GenericToolCardProps extends ToolCallOwnerProps {
   t: ToolTreeProps['t']
 }
 
-export function GenericToolCard({ toolName, block, cwd, home, openFile, inspect, t }: GenericToolCardProps) {
+export function GenericToolCard({
+  toolName, block, cwd, home, openFile, inspect, renderMessageImages, t,
+}: GenericToolCardProps) {
   const model = toolRowModel(toolName, block, cwd, home)
   const terminal = terminalCardModel(block, cwd)
   const read = readCardModel(block, cwd, home)
   const diff = diffCardModel(block)
   const search = searchCardModel(block)
   const web = webCardModel(block)
+  const imageCard = resultImageCard(block, cwd, home)
   // A failing exit status is the terminal card's own error signal (the call
   // itself settles isError:false), surfaced as the row's red state dot.
   const state = model.state === 'ok' && terminal !== null && terminalFailed(terminal)
     ? 'error'
     : model.state
   const singleFile = model.filePath !== undefined
+  const output = imageCard !== null
+    ? (imageCard.text !== '' ? imageCard.text : null)
+    : model.output
   return (
-    <ToolRow
-      t={t}
-      variant={model.variant}
-      toolName={toolName}
-      icon={VARIANT_ICONS[model.variant]}
-      title={t(model.titleKey)}
-      summary={model.summary}
-      // Single-file tools never expose an args body — the path link is the only
-      // args interaction. A card is not an args body: a read/write/edit row is
-      // single-file AND carries a card, so the card expands under the path link.
-      bodyRaw={singleFile ? null : model.bodyRaw}
-      output={model.output}
-      errorSummary={model.errorSummary}
-      terminal={terminal}
-      diff={diff}
-      read={read}
-      search={search}
-      web={web}
-      state={state}
-      filePath={model.filePath}
-      onOpenFile={singleFile ? openFile : undefined}
-      inspect={inspect}
-    />
+    <>
+      <ToolRow
+        t={t}
+        variant={model.variant}
+        toolName={toolName}
+        icon={VARIANT_ICONS[model.variant]}
+        title={t(model.titleKey)}
+        summary={model.summary}
+        // Single-file tools never expose an args body — the path link is the only
+        // args interaction. A card is not an args body: a read/write/edit row is
+        // single-file AND carries a card, so the card expands under the path link.
+        bodyRaw={singleFile ? null : model.bodyRaw}
+        output={output}
+        errorSummary={model.errorSummary}
+        terminal={terminal}
+        diff={diff}
+        read={read}
+        search={search}
+        web={web}
+        state={state}
+        filePath={model.filePath}
+        onOpenFile={singleFile ? openFile : undefined}
+        inspect={inspect}
+      />
+      {imageCard !== null && renderMessageImages !== undefined && (
+        <div className={css.images} data-tool-images>
+          {imageCard.images.map((image, index) => (
+            <div key={image.attachment.attachmentId || index} className={css.imageItem}>
+              {renderMessageImages({
+                images: [image],
+                align: 'start',
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   )
 }

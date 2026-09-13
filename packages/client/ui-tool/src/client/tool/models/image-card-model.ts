@@ -239,3 +239,59 @@ export function imageCardModel(
     text,
   }
 }
+
+/**
+ * Read the text of every text block of a settled result, joined in order.
+ * Unlike imageTexts, this does not require an IMAGE_ENVELOPE.
+ * @param content - the settled result's content blocks.
+ * @returns the joined text, or empty string when no text block is present.
+ */
+function resultTexts(content: readonly unknown[]): string {
+  const parts: string[] = []
+  for (const part of content) {
+    if (typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'text') {
+      const { text } = part as { text?: unknown }
+      if (typeof text === 'string' && text !== '') {
+        parts.push(text)
+      }
+    }
+  }
+  return parts.join('\n')
+}
+
+/**
+ * Derive an image card for any settled tool result carrying valid image attachment references.
+ *
+ * Unlike read_image's `imageCardModel`, this does not demand a specific tool name,
+ * presentation metadata, or the strict read_image envelope. It accepts any settled
+ * call returning well-formed image blocks. The label is derived from path-shaped
+ * arguments (e.g. file_path, path, file), falling back to the first attachment's
+ * name, and finally to the tool name.
+ *
+ * @param block - running or settled Tool block.
+ * @param sessionCwd - session workspace root for relative path abbreviation.
+ * @param home - host account home for `~` abbreviation.
+ * @returns the derived image card model, or null if the block is not a settled result with images.
+ */
+export function resultImageCard(
+  block: ToolCallBlock,
+  sessionCwd?: string,
+  home?: string,
+): ImageCardModel | null {
+  if (!('kind' in block) || block.isError) return null
+  const refs = imageReferences(block.content)
+  if (refs === null) return null
+  const call = parsedToolCall(block)
+  const args = call?.args ?? {}
+  const pathArg = ['file_path', 'path', 'filepath', 'file', 'image_path', 'filename']
+    .map(key => args[key])
+    .find((v): v is string => typeof v === 'string' && v.trim() !== '')
+  const label = pathArg !== undefined
+    ? abbreviateHomePath(relativizeToCwd(pathArg, sessionCwd), home)
+    : (refs[0]?.name ?? call?.name ?? '')
+  return {
+    label,
+    images: refs.map(ref => ({ attachment: ref })),
+    text: resultTexts(block.content),
+  }
+}
