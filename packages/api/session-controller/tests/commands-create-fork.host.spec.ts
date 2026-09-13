@@ -67,6 +67,76 @@ describe('Session creation failures', () => {
     await ctx.fiber.dispose()
   })
 
+  it('attaches created session to owning workspace when only cwd is supplied', async () => {
+    const ctx = await baseContext()
+    const attachSession = vi.fn(() => Promise.resolve())
+    const workspace = {
+      id: 'workspace-cwd' as WorkspaceId,
+      path: '/owned/workspace',
+      attachSession,
+    } as unknown as Workspace
+    ctx.provide('workspaceRegistry', {
+      get: () => undefined,
+      list: () => [workspace],
+      resolveByPath: vi.fn(async (path: string) => {
+        if (path === '/owned/workspace') return workspace
+        return undefined
+      }),
+    } as never)
+    const ensureSession = vi.fn((sessionId: SessionId, cwd: string) => {
+      const session = ctx.sessions.create(sessionId, { meta: { cwd } })
+      return Promise.resolve({ id: sessionId, session } as Agent)
+    })
+    const controller = new SessionCommandController(
+      ctx,
+      controllerAgents({ ensureSession }),
+      '/default',
+    )
+
+    const created = await controller.create({ cwd: '/owned/workspace' })
+
+    expect(created.sessionId).toMatch(/^session-/)
+    expect(attachSession).toHaveBeenCalledWith(created.sessionId)
+    expect(ensureSession).toHaveBeenCalledWith(
+      created.sessionId,
+      '/owned/workspace',
+      false,
+      undefined,
+    )
+    await ctx.fiber.dispose()
+  })
+
+  it('leaves session unattached when cwd does not match any workspace or resolveByPath fails', async () => {
+    const ctx = await baseContext()
+    ctx.provide('workspaceRegistry', {
+      get: () => undefined,
+      list: () => [],
+      resolveByPath: vi.fn(async () => {
+        throw new Error('path does not exist')
+      }),
+    } as never)
+    const ensureSession = vi.fn((sessionId: SessionId, cwd: string) => {
+      const session = ctx.sessions.create(sessionId, { meta: { cwd } })
+      return Promise.resolve({ id: sessionId, session } as Agent)
+    })
+    const controller = new SessionCommandController(
+      ctx,
+      controllerAgents({ ensureSession }),
+      '/default',
+    )
+
+    const created = await controller.create({ cwd: '/unowned/path' })
+
+    expect(created.sessionId).toMatch(/^session-/)
+    expect(ensureSession).toHaveBeenCalledWith(
+      created.sessionId,
+      '/unowned/path',
+      false,
+      undefined,
+    )
+    await ctx.fiber.dispose()
+  })
+
   it('maps missing Workspaces and attachment failures', async () => {
     const missing = await baseContext()
     missing.provide('workspaceRegistry', { get: () => undefined, list: () => [] } as never)

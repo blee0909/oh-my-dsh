@@ -98,6 +98,12 @@ export class SessionCommandController {
           workspaceId: request.workspaceId,
         })
       }
+    } else if (request.cwd !== undefined && typeof this.ctx.workspaceRegistry?.resolveByPath === 'function') {
+      try {
+        workspace = await this.ctx.workspaceRegistry.resolveByPath(request.cwd)
+      } catch {
+        // Path might not exist on host or cannot be resolved by realpath; leave workspace undefined
+      }
     }
     const cwd = workspace?.path ?? request.cwd ?? this.defaultCwd
     let adopted: Agent
