@@ -334,13 +334,16 @@ async function resolveColdIdentity(
     // Per-child isolation: durable corruption is stable; absence and backend
     // failures remain retryable. Either way, the listing itself still succeeds.
     assertListingNotCancelled(signal)
+    const reason = isUnsupportedError(error)
+      ? 'unsupported'
+      : sessionQueryCode(error) === 'SESSION_QUERY_CORRUPT_SESSION'
+        || sessionQueryCode(error) === 'SESSION_QUERY_SOURCE_CONFLICT'
+        ? 'corrupt'
+        : 'unavailable'
     return {
       kind: 'diagnostic',
       id: childId,
-      reason: sessionQueryCode(error) === 'SESSION_QUERY_CORRUPT_SESSION'
-        || sessionQueryCode(error) === 'SESSION_QUERY_SOURCE_CONFLICT'
-        ? 'corrupt'
-        : 'unavailable',
+      reason,
     }
   }
   using ownedObservation = observation
@@ -405,4 +408,22 @@ function assertListingNotCancelled(signal: AbortSignal | undefined): void {
 
 function sessionQueryCode(error: unknown): unknown {
   return error instanceof Error && 'code' in error ? error.code : undefined
+}
+
+function isUnsupportedError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const err = error as { name?: unknown; code?: unknown; cause?: unknown; message?: unknown }
+  if (err.name === 'SessionFormatUnsupportedMigrationError' || err.name === 'SessionFormatUnsupportedError') {
+    return true
+  }
+  if (err.code === 'SESSION_QUERY_UNSUPPORTED_FORMAT') {
+    return true
+  }
+  if (typeof err.message === 'string' && /unsupported (format|migration|version)/i.test(err.message)) {
+    return true
+  }
+  if (err.cause !== undefined && isUnsupportedError(err.cause)) {
+    return true
+  }
+  return false
 }

@@ -702,6 +702,27 @@ describe('SubagentRuntime.listChildren', () => {
     expect(entries).toEqual([{ kind: 'diagnostic', id: future, reason: 'corrupt' }])
   })
 
+  it('diagnoses a child whose session log uses an unsupported migration format as unsupported', async () => {
+    const { ctx, parent } = await setup([])
+    const unsupportedChild = '00000000-0000-4000-8000-0000000000ee'
+    const query = ctx.get('sessionQuery')!
+    const origObserve = query.observeSession.bind(query)
+    vi.spyOn(query, 'observeSession').mockImplementation(async (id, opts) => {
+      if (id === unsupportedChild) {
+        const error = new Error('format v3 request/header rejects retired header.system')
+        error.name = 'SessionFormatUnsupportedMigrationError'
+        throw error
+      }
+      return origObserve(id, opts)
+    })
+    await authorChild(ctx, unsupportedChild, {
+      parentSession: parent.id,
+      origin: 'subagent',
+    }, childEvents(descriptorPayload('unsupported child')))
+    const entries = await ctx.subagents.listChildren(parent.id)
+    expect(entries).toEqual([{ kind: 'diagnostic', id: unsupportedChild, reason: 'unsupported' }])
+  })
+
   it('rejects a fork whose only descriptor belongs to its inherited seed', async () => {
     const { ctx, parent } = await setup([])
     // A seed-replayed descriptor predates this child's own suffix and cannot

@@ -71,8 +71,8 @@ export type SubagentListEntry =
      * for any candidate whose log makes a registered unit's fold or schema
      * throw (deterministic data damage, contained per child); `unavailable`
      * when the candidate's Session observation was absent or transiently
-     * unreadable (retried on the next listing). `unsupported` is never produced; it remains in the
-     * union for consumers that route on it.
+     * unreadable (retried on the next listing); `unsupported` when the candidate's
+     * format version or log structure cannot be migrated or interpreted by this build.
      */
     readonly reason: 'corrupt' | 'unsupported' | 'unavailable'
   }
