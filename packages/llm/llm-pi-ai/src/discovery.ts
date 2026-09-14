@@ -2,11 +2,12 @@
  * Answering "which models can this provider serve?" for the configuration
  * surface's "fetch available models" action.
  *
- * A route the installed pi-ai catalog ships is answered **from that catalog**,
- * with no network call at all: pi-ai's registry is the authoritative list for
- * its own providers, and it carries the capacities a listing endpoint would
- * not disclose. Only a route the catalog does not describe — a gateway, a
- * self-hosted server — is interrogated over the wire.
+ * A route the installed pi-ai catalog ships is interrogated at its endpoint
+ * (when known) and merged with the installed catalog: models known in both
+ * retain the catalog's rich capacities (context window and max output tokens),
+ * while new models advertised by the endpoint are discovered as live candidates.
+ * If no endpoint can be reached (offline, unconfigured, or no listable
+ * protocol), the installed catalog serves as the resilient fallback.
  *
  * Neither path is a catalog refresh. Nothing here is stored: the request
  * carries a draft the user is still editing, and the reply is candidate
@@ -22,10 +23,11 @@
  * @module dsh-llm-pi-ai/discovery
  */
 
+import type { Api, Model } from '@earendil-works/pi-ai'
 import { INVALID_CREDENTIAL_CODE, LlmError, normalizeApiKey } from '@deepseek-ai/dsh-llm'
 import type { LlmDiscoveredModel, LlmModelDiscoveryOperation } from '@deepseek-ai/dsh-llm'
 import { attributionHeaders } from '@deepseek-ai/dsh-llm'
-import { catalogModels } from './catalog.ts'
+import { catalogModels, catalogProvider, sharedCatalogApi } from './catalog.ts'
 
 /**
  * Protocols whose model listing this module can read. OpenAI protocols use
@@ -248,6 +250,85 @@ function usableProbeKey(raw: string): string {
   )
 }
 
+/** Map installed catalog models to basic discovery metadata. */
+function catalogListing(installed: ReadonlyMap<string, Model<Api>>): LlmDiscoveredModel[] {
+  return [...installed.values()].map(model => ({
+    id: model.id,
+    name: model.name,
+    ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
+    ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
+  }))
+}
+
+/**
+ * Union-merge live endpoint models with installed catalog capacities.
+ * Endpoint models appear in their advertised order, adopting catalog capacities
+ * when known. Any catalog models not present in the endpoint reply are appended
+ * to ensure known capabilities are not lost.
+ */
+function mergeDiscoveredModels(
+  endpointModels: readonly LlmDiscoveredModel[],
+  installed: ReadonlyMap<string, Model<Api>>,
+): LlmDiscoveredModel[] {
+  if (installed.size === 0) return [...endpointModels]
+  const seen = new Set<string>()
+  const merged: LlmDiscoveredModel[] = []
+
+  for (const model of endpointModels) {
+    if (seen.has(model.id)) continue
+    seen.add(model.id)
+    const catalogEntry = installed.get(model.id)
+    if (catalogEntry !== undefined) {
+      const contextWindow = catalogEntry.contextWindow ?? model.contextWindow
+      const maxTokens = catalogEntry.maxTokens ?? model.maxTokens
+      merged.push({
+        id: catalogEntry.id,
+        name: catalogEntry.name ?? model.name ?? catalogEntry.id,
+        ...contextWindow === undefined ? {} : { contextWindow },
+        ...maxTokens === undefined ? {} : { maxTokens },
+      })
+    } else {
+      merged.push(model)
+    }
+  }
+
+  for (const catalogEntry of installed.values()) {
+    if (!seen.has(catalogEntry.id)) {
+      merged.push({
+        id: catalogEntry.id,
+        name: catalogEntry.name ?? catalogEntry.id,
+        ...catalogEntry.contextWindow === undefined ? {} : { contextWindow: catalogEntry.contextWindow },
+        ...catalogEntry.maxTokens === undefined ? {} : { maxTokens: catalogEntry.maxTokens },
+      })
+    }
+  }
+
+  return merged
+}
+
+/** Timeout for live endpoint interrogations to prevent hanging on unreachable hosts. */
+const DISCOVERY_PROBE_TIMEOUT_MS = 4000
+
+/**
+ * Resolve the base URL for a catalog provider, checking provider-level baseUrl
+ * first, and falling back to model-level baseUrl with preference for '/v1' endpoints.
+ */
+function resolveCatalogBaseUrl(
+  provider: string,
+  installed: ReadonlyMap<string, Model<Api>>,
+): string | undefined {
+  const fromProvider = catalogProvider(provider)?.baseUrl
+  if (fromProvider !== undefined && fromProvider.length > 0) return fromProvider
+  let candidate: string | undefined
+  for (const model of installed.values()) {
+    if (model.baseUrl !== undefined && model.baseUrl.length > 0) {
+      if (model.baseUrl.endsWith('/v1')) return model.baseUrl
+      candidate ??= model.baseUrl
+    }
+  }
+  return candidate
+}
+
 /** Host-owned profile inputs that a configuration draft deliberately omits. */
 export interface StoredModelDiscoveryProfile {
   /** Deployment headers configured on the named route. */
@@ -270,48 +351,63 @@ export async function discoverModels(
   request: LlmModelDiscoveryOperation,
   storedProfile?: () => StoredModelDiscoveryProfile | undefined,
 ): Promise<readonly LlmDiscoveredModel[]> {
-  // A catalog route already has its answer, and a better one: the installed
-  // entries carry context windows and output caps no listing endpoint reports.
-  if (request.provider !== undefined) {
-    const installed = catalogModels(request.provider)
-    if (installed.size > 0) {
-      return [...installed.values()].map(model => ({
-        id: model.id,
-        name: model.name,
-        contextWindow: model.contextWindow,
-        maxTokens: model.maxTokens,
-      }))
+  const installed = request.provider !== undefined ? catalogModels(request.provider) : undefined
+  const hasCatalog = installed !== undefined && installed.size > 0
+
+  const explicitBaseUrl = request.baseURL !== undefined && request.baseURL.length > 0 ? request.baseURL : undefined
+  const catalogBaseUrl = hasCatalog && request.provider !== undefined
+    ? resolveCatalogBaseUrl(request.provider, installed)
+    : undefined
+  const baseURL = explicitBaseUrl ?? catalogBaseUrl
+
+  if (baseURL === undefined || baseURL.length === 0) {
+    if (hasCatalog) {
+      return catalogListing(installed)
     }
-  }
-  if (request.baseURL === undefined || request.baseURL.length === 0) {
     throw new LlmError(
       `pi-ai ships no catalog for provider "${request.provider ?? ''}", so its models can only come from its`
       + " endpoint; set a baseURL, or enter this provider's models by hand",
       'DISCOVERY_FAILED',
     )
   }
-  // A draft that has not chosen a protocol yet is asked as OpenAI Chat
-  // Completions: it is the shape a gateway is overwhelmingly likely to speak,
-  // and the alternative — refusing until the field is filled — would withhold
-  // the action from the case it exists for. The cost is a misdirected message
-  // when the endpoint speaks something else (an Anthropic gateway answers 401,
-  // which reads as a credential problem), and hand-entry remains the way out.
-  const api = request.api ?? 'openai-completions'
+
+  const catalogApi = hasCatalog ? sharedCatalogApi(installed) : undefined
+  const api = request.api ?? catalogApi ?? 'openai-completions'
   if (!LISTABLE_PROTOCOLS.has(api)) {
+    if (hasCatalog && explicitBaseUrl === undefined) {
+      return catalogListing(installed)
+    }
     throw new LlmError(
       `pi-ai protocol "${api}" has no model listing this build can read; enter this provider's models by hand`,
       'DISCOVERY_UNSUPPORTED',
     )
   }
-  const url = listingUrl(request.baseURL, api)
-  // A key typed into the form wins: it may replace the stored key that is
-  // failing. The stored profile is asked past the catalog and protocol checks,
-  // and its credential resolver remains lazy so a typed key cannot fail over a
-  // stored credential it supersedes. A route may still authenticate through a
-  // deployment-owned Authorization header when neither key exists.
+
   const stored = storedProfile?.()
-  const supplied = request.apiKey ?? await stored?.resolveApiKey()
+  let supplied: string | undefined = request.apiKey
+  if (supplied === undefined && stored !== undefined) {
+    try {
+      supplied = await stored.resolveApiKey()
+    } catch (error: unknown) {
+      if (request.signal?.aborted) {
+        throw new LlmError('model discovery aborted by caller', 'ABORTED', { cause: error })
+      }
+      if (explicitBaseUrl !== undefined) throw error
+      supplied = undefined
+    }
+  }
   const apiKey = supplied === undefined ? undefined : usableProbeKey(supplied)
+
+  // An implicit catalog route with no credentials only reaches the network if the
+  // provider is known to serve public unauthenticated model listings (e.g. opencode-go).
+  // Otherwise, cloud providers (OpenAI, Anthropic, DeepSeek) reject unauthenticated
+  // listings with 401, so answering immediately from the installed catalog avoids
+  // futile network delays and hangs in offline or testing environments.
+  if (explicitBaseUrl === undefined && hasCatalog && apiKey === undefined && request.provider !== 'opencode-go') {
+    return catalogListing(installed)
+  }
+
+  const url = listingUrl(baseURL, api)
   let response: Response
   try {
     const headers = new Headers(stored?.headers === undefined ? undefined : Object.entries(stored.headers))
@@ -323,40 +419,71 @@ export async function discoverModels(
       headers.set('authorization', `Bearer ${apiKey}`)
     }
     for (const [name, value] of Object.entries(attributionHeaders())) headers.set(name, value)
+
+    const timeoutSignal = AbortSignal.timeout(DISCOVERY_PROBE_TIMEOUT_MS)
+    const signal = request.signal !== undefined ? AbortSignal.any([request.signal, timeoutSignal]) : timeoutSignal
+
     response = await fetch(url, {
       method: 'GET',
       headers,
-      ...request.signal === undefined ? {} : { signal: request.signal },
+      signal,
     })
   } catch (error: unknown) {
     if (request.signal?.aborted) {
       throw new LlmError('model discovery aborted by caller', 'ABORTED', { cause: error })
     }
+    if (explicitBaseUrl !== undefined) {
+      throw new LlmError(`could not reach ${url}`, 'DISCOVERY_FAILED', { cause: error })
+    }
+    if (hasCatalog) return catalogListing(installed)
     throw new LlmError(`could not reach ${url}`, 'DISCOVERY_FAILED', { cause: error })
   }
+
   if (!response.ok) {
+    if (hasCatalog && explicitBaseUrl === undefined) {
+      return catalogListing(installed)
+    }
     throw new LlmError(
       `${url} answered ${response.status}${response.status === 401 || response.status === 403 ? '; check the API key' : ''}`,
       'DISCOVERY_FAILED',
     )
   }
+
   let text: string
   try {
     text = await readBounded(response, url)
   } catch (error: unknown) {
-    // Cancellation during the body read rejects with the abort reason, which
-    // may be any value; the caller gets the same coded failure it would have
-    // for a cancellation before the request went out.
     if (request.signal?.aborted) {
       throw new LlmError('model discovery aborted by caller', 'ABORTED', { cause: error })
     }
+    if (hasCatalog && explicitBaseUrl === undefined) {
+      return catalogListing(installed)
+    }
     throw error
   }
+
   let body: unknown
   try {
     body = JSON.parse(text)
   } catch (error: unknown) {
+    if (hasCatalog && explicitBaseUrl === undefined) {
+      return catalogListing(installed)
+    }
     throw new LlmError(`${url} did not answer with JSON`, 'DISCOVERY_FAILED', { cause: error })
   }
-  return readListing(body)
+
+  let discovered: LlmDiscoveredModel[]
+  try {
+    discovered = readListing(body)
+  } catch (error: unknown) {
+    if (hasCatalog && explicitBaseUrl === undefined) {
+      return catalogListing(installed)
+    }
+    throw error
+  }
+
+  if (hasCatalog) {
+    return mergeDiscoveredModels(discovered, installed)
+  }
+  return discovered
 }

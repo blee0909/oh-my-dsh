@@ -656,7 +656,7 @@ function invalid(provider: string, detail: string): never {
  * spanning Responses and Chat Completions) has no such answer, so a model it
  * does not describe must name its protocol at the route.
  */
-function sharedCatalogApi(defaults: ReadonlyMap<string, Model<Api>>): string | undefined {
+export function sharedCatalogApi(defaults: ReadonlyMap<string, Model<Api>>): string | undefined {
   const apis = new Set<string>()
   for (const model of defaults.values()) apis.add(model.api)
   return apis.size === 1 ? [...apis][0] : undefined

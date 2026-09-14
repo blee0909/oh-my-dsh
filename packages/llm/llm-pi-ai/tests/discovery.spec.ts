@@ -74,18 +74,64 @@ async function harness(): Promise<Context> {
 }
 
 describe('catalog-route model discovery', () => {
-  it('answers from the installed registry, with capacities and no network call', async () => {
-    const server = await listingServer({ body: JSON.stringify({ data: [{ id: 'from-the-endpoint' }] }) })
+  it('queries endpoint for catalog provider and returns union of catalog models and advertised models', async () => {
+    const server = await listingServer({
+      body: JSON.stringify({
+        data: [
+          { id: 'from-the-endpoint', name: 'Endpoint Only' },
+          { id: 'deepseek-v4-flash', name: 'Endpoint Flash' },
+        ],
+      }),
+    })
     const ctx = await harness()
 
     const models = await ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek', baseURL: server.url })
 
-    // pi-ai's own registry is the authority for its own providers, and it
-    // carries what a listing endpoint would not disclose.
+    // The endpoint was interrogated over the wire
+    expect(server.paths).toEqual(['/models'])
+    // Models include both the new endpoint model and builtin catalog models
     expect(models.map(model => model.id).sort())
-      .toEqual(getBuiltinModels('deepseek').map(model => model.id).sort())
-    expect(models.every(model => (model.contextWindow ?? 0) > 0 && (model.maxTokens ?? 0) > 0)).toBe(true)
-    expect(server.paths).toEqual([])
+      .toEqual(['from-the-endpoint', ...getBuiltinModels('deepseek').map(model => model.id)].sort())
+
+    // Known catalog model keeps its rich catalog capacities
+    const deepseekFlash = models.find(model => model.id === 'deepseek-v4-flash')
+    expect(deepseekFlash?.contextWindow).toBeGreaterThan(0)
+    expect(deepseekFlash?.maxTokens).toBeGreaterThan(0)
+
+    // New endpoint model absent from catalog is discovered as candidate
+    const endpointModel = models.find(model => model.id === 'from-the-endpoint')
+    expect(endpointModel).toEqual({ id: 'from-the-endpoint', name: 'Endpoint Only' })
+  })
+
+  it('fails loud when an explicitly provided baseURL for a catalog provider fails', async () => {
+    const broken = await listingServer({ status: 500, body: '{"error":"broken"}' })
+    const ctx = await harness()
+
+    await expect(ctx.llm.discoverModels('llm-pi-ai', { provider: 'deepseek', baseURL: broken.url }))
+      .rejects.toThrow(/answered 500$/)
+  })
+
+  it('discovers new models on public catalog providers like opencode-go and merges with catalog', async () => {
+    const server = await listingServer({
+      body: JSON.stringify({
+        data: [
+          { id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' },
+          { id: 'deepseek-v4-flash' },
+        ],
+      }),
+    })
+    const ctx = await harness()
+
+    const models = await ctx.llm.discoverModels('llm-pi-ai', { provider: 'opencode-go', baseURL: server.url })
+
+    expect(server.paths).toEqual(['/models'])
+    expect(models.some(model => model.id === 'deepseek-v4.1-flash')).toBe(true)
+    const v41 = models.find(model => model.id === 'deepseek-v4.1-flash')
+    expect(v41).toEqual({ id: 'deepseek-v4.1-flash', name: 'DeepSeek V4.1 Flash' })
+
+    const flash = models.find(model => model.id === 'deepseek-v4-flash')
+    expect(flash?.contextWindow).toBeGreaterThan(0)
+    expect(flash?.maxTokens).toBeGreaterThan(0)
   })
 
   it('needs no endpoint for a route the catalog describes', async () => {
