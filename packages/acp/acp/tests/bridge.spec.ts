@@ -378,7 +378,7 @@ describe('automation-only ACP bridge', () => {
     vi.spyOn(persistence, 'list').mockResolvedValue(([
       { version: SESSION_FORMAT_VERSION, id: SessionId(active.sessionId), createdAt: 9, isSeeded: false, cwd: process.cwd() },
       { version: SESSION_FORMAT_VERSION, id: SessionId('subagent'), createdAt: 8, isSeeded: false, cwd: '/missing/filter', origin: 'subagent' },
-      { version: SESSION_FORMAT_VERSION, id: SessionId('fork'), createdAt: 7, isSeeded: false, cwd: '/missing/filter', parentSession: SessionId('parent') },
+      { version: SESSION_FORMAT_VERSION, id: SessionId('subagent-child'), createdAt: 7, isSeeded: false, cwd: '/missing/filter', origin: 'subagent', parentSession: SessionId('parent') },
       { version: SESSION_FORMAT_VERSION, id: SessionId('no-cwd'), createdAt: 6, isSeeded: false },
       { version: SESSION_FORMAT_VERSION, id: SessionId('relative'), createdAt: 5, isSeeded: false, cwd: 'relative' },
       { version: SESSION_FORMAT_VERSION, id: SessionId('other'), createdAt: 4, isSeeded: false, cwd: '/missing/other' },
@@ -401,6 +401,86 @@ describe('automation-only ACP bridge', () => {
       sessionId: 'no-cwd',
       cwd: '/missing/filter',
     })).rejects.toThrow(/cwd does not match/)
+  })
+
+  it('lists and resumes forked sessions with lineage parentSession (#6491)', async () => {
+    harness = await makeBridgeHarness({ script: [textResponse('resumed')] })
+    await harness.client.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} })
+    const created = await harness.client.newSession({ cwd: process.cwd(), mcpServers: [] })
+    await harness.client.prompt({ sessionId: created.sessionId, prompt: [{ type: 'text', text: 'persist' }] })
+    await harness.client.closeSession({ sessionId: created.sessionId })
+
+    const persistence = harness.ctx.get('sessionPersistence')!
+    const realStat = persistence.stat.bind(persistence)
+    const realList = persistence.list.bind(persistence)
+
+    const subagentId = SessionId('subagent-session')
+    vi.spyOn(persistence, 'list').mockImplementation(async (opts) => {
+      const items = await realList(opts)
+      return [
+        ...items.map(snap => snap.header.id === created.sessionId ? {
+          ...snap,
+          header: {
+            ...snap.header,
+            parentSession: SessionId('parent-session'),
+            isSeeded: true,
+          },
+        } : snap),
+        snapshotOf({
+          version: SESSION_FORMAT_VERSION,
+          id: subagentId,
+          createdAt: 9999,
+          isSeeded: true,
+          parentSession: SessionId('parent-session'),
+          origin: 'subagent',
+          cwd: process.cwd(),
+        }),
+      ]
+    })
+
+    vi.spyOn(persistence, 'stat').mockImplementation(async (id, opts) => {
+      if (id === subagentId) {
+        return snapshotOf({
+          version: SESSION_FORMAT_VERSION,
+          id: subagentId,
+          createdAt: 9999,
+          isSeeded: true,
+          parentSession: SessionId('parent-session'),
+          origin: 'subagent',
+          cwd: process.cwd(),
+        })
+      }
+      const snap = await realStat(id, opts)
+      if (snap && snap.header.id === created.sessionId) {
+        return {
+          ...snap,
+          header: {
+            ...snap.header,
+            parentSession: SessionId('parent-session'),
+            isSeeded: true,
+          },
+        }
+      }
+      return snap
+    })
+
+    const list = await harness.client.listSessions({ cwd: process.cwd() })
+    expect(list.sessions.some(s => s.sessionId === created.sessionId)).toBe(true)
+    expect(list.sessions.some(s => s.sessionId === subagentId)).toBe(false)
+
+    await expect(harness.client.resumeSession({
+      sessionId: created.sessionId,
+      cwd: process.cwd(),
+      mcpServers: [],
+    })).resolves.toMatchObject({
+      configOptions: expect.any(Array),
+    })
+
+    await expect(harness.client.resumeSession({
+      sessionId: subagentId,
+      cwd: process.cwd(),
+      mcpServers: [],
+    })).rejects.toThrow(/session is not resumable/)
   })
 
   it.each([
