@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CONTENT_FILTER_CODE,
+  isContentFilterError,
   isQuotaExceededError,
   isTransientRateLimitError,
   extractRetryDelayMs,
@@ -68,6 +70,27 @@ describe('Layer 1 Error Classification & Transient Rate Limit (#5465)', () => {
 
     it('returns undefined when no delay hint is present', () => {
       expect(extractRetryDelayMs('HTTP 429: slow down')).toBeUndefined()
+    })
+  })
+
+  describe('isContentFilterError (#6476)', () => {
+    it('identifies provider content safety and moderation rejections', () => {
+      expect(CONTENT_FILTER_CODE).toBe('CONTENT_FILTER')
+      expect(isContentFilterError('Content Exists Risk')).toBe(true)
+      expect(isContentFilterError('error: invalid_request_error message: Content Exists Risk')).toBe(true)
+      expect(isContentFilterError('sensitive content detected')).toBe(true)
+      expect(isContentFilterError('request was blocked by safety filters')).toBe(true)
+      expect(isContentFilterError('The prompt violated our usage policy')).toBe(true)
+      expect(isContentFilterError('content_filter')).toBe(true)
+      expect(isContentFilterError('finish_reason: content_filter')).toBe(true)
+      expect(isContentFilterError('HARM_CATEGORY_HATE_SPEECH')).toBe(true)
+    })
+
+    it('does not misclassify standard errors as content filter blocks', () => {
+      expect(isContentFilterError('400 Invalid json')).toBe(false)
+      expect(isContentFilterError('context window exceeded')).toBe(false)
+      expect(isContentFilterError('rate limit exceeded')).toBe(false)
+      expect(isContentFilterError('insufficient quota')).toBe(false)
     })
   })
 })

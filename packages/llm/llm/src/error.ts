@@ -27,6 +27,9 @@ export const CONTEXT_WINDOW_EXCEEDED_CODE = 'CONTEXT_WINDOW_EXCEEDED'
 /** Canonical provider-neutral code for an exhausted account quota or balance. */
 export const QUOTA_EXCEEDED_CODE = 'QUOTA'
 
+/** Canonical provider-neutral code for a request rejected by content safety or moderation filters. */
+export const CONTENT_FILTER_CODE = 'CONTENT_FILTER'
+
 /**
  * Canonical provider-neutral code for a response that completed normally but
  * carried no content blocks at all. Providers occasionally emit a degenerate
@@ -131,6 +134,20 @@ export function isQuotaExceededError(detail: string): boolean {
     || /\bexceed(?:ed|s)?[\s_-]+(?:(?:your|the)[\s_-]+)?(?:current[\s_-]+)?quota\b/i.test(detail)
     || /\b(?:balance|credits?)[\s_-]+(?:is[\s_-]+)?(?:exhausted|depleted)\b/i.test(detail)
     || /\bout[\s_-]+of[\s_-]+(?:credits?|budget)\b/i.test(detail)
+}
+
+/**
+ * Recognize provider error detail indicating that content was rejected by a
+ * content safety, moderation, or risk filter rather than failing format/argument validation.
+ * @param detail - provider error code/type/message text joined into one string.
+ * @returns true when the detail identifies a content moderation or safety block.
+ */
+export function isContentFilterError(detail: string): boolean {
+  return /\bcontent[\s_-]*(?:exists[\s_-]*risk|filter(?:ed)?|moderation)\b/i.test(detail)
+    || /\b(?:sensitive|prohibited|unsafe)[\s_-]*content\b/i.test(detail)
+    || /\bviolated[\s_-]*(?:our\s+)?(?:usage[\s_-]*policy|content[\s_-]*policy)\b/i.test(detail)
+    || /\b(?:prompt|request)[\s_-]*(?:was|is)?[\s_-]*blocked[\s_-]*by[\s_-]*(?:safety|moderation|filters?)\b/i.test(detail)
+    || /\bHARM_CATEGORY\w*\b/i.test(detail)
 }
 
 /**

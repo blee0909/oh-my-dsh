@@ -8,7 +8,7 @@
  * @module dsh-llm-deepseek/adapter
  */
 
-import { attributionHeaders, contentHasImage, CONTEXT_WINDOW_EXCEEDED_CODE, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, offloadedImageText, offloadRequestImagesWithPolicy, ProviderRequestId, QUOTA_EXCEEDED_CODE, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { attributionHeaders, CONTENT_FILTER_CODE, contentHasImage, CONTEXT_WINDOW_EXCEEDED_CODE, isContentFilterError, isContextWindowExceededError, isQuotaExceededError, LlmAdapter, LlmError, offloadedImageText, offloadRequestImagesWithPolicy, ProviderRequestId, QUOTA_EXCEEDED_CODE, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type {
   ContentBlock,
   GenerateOptions,
@@ -342,9 +342,11 @@ export function httpErrorCode(status: number, error?: WireError['error']): strin
   if (status === 413) return 'INVALID_REQUEST'
   const detail = [error?.code, error?.type, error?.message].filter(Boolean).join(' ')
   if (isQuotaExceededError(detail)) return QUOTA_EXCEEDED_CODE
+  if (isContentFilterError(detail)) return CONTENT_FILTER_CODE
   if (status === 429) return 'RATE_LIMIT'
   if (status === 400) {
     if (isContextWindowExceededError(detail)) return CONTEXT_WINDOW_EXCEEDED_CODE
+    if (isContentFilterError(detail)) return CONTENT_FILTER_CODE
     return 'INVALID_REQUEST'
   }
   if (status >= 500) return 'SERVER'
@@ -690,6 +692,9 @@ export class DeepSeekAdapter extends LlmAdapter {
         }
         if (response.status === 400 && usedFiles.length > 0 && providerRejectedNormalizedImage(detail)) {
           message = normalizedImageDiagnostic(usedFiles, message, detail)
+        }
+        if (isContentFilterError(detail)) {
+          message = `${message}; request blocked by provider content safety filter (e.g. sensitive keywords in history or tool results)`
         }
         const delay = providerRetryAfterMs(response.headers.get('retry-after'))
         const id = requestId(response.headers)

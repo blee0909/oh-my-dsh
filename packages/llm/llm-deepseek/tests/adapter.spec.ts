@@ -7,6 +7,7 @@ import { AttachmentId, ImageVariantId } from '@deepseek-ai/dsh-attachment'
 import type { AttachmentStore, ImageAttachmentRef, RequestImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { createLaunchEnvironmentSnapshot } from '@deepseek-ai/dsh-launch-environment'
 import LlmRuntime, { ToolCallId, createUserMessage,
+  CONTENT_FILTER_CODE,
   CONTEXT_WINDOW_EXCEEDED_CODE,
   LlmError,
   ProviderRequestId,
@@ -1426,6 +1427,35 @@ describe('DeepSeekAdapter against a mock server', () => {
     expect(httpErrorCode(429, { code: 'insufficient_quota', message: 'account credits exhausted' }))
       .toBe(QUOTA_EXCEEDED_CODE)
     expect(httpErrorCode(429, { message: 'request rate limit exceeded' })).toBe('RATE_LIMIT')
+  })
+
+  it('classifies content safety risk and moderation rejections as CONTENT_FILTER (#6476)', () => {
+    expect(httpErrorCode(400, { message: 'Content Exists Risk', code: 'invalid_request_error' }))
+      .toBe(CONTENT_FILTER_CODE)
+    expect(httpErrorCode(400, { message: 'sensitive content detected' }))
+      .toBe(CONTENT_FILTER_CODE)
+    expect(httpErrorCode(400, { message: 'The prompt was blocked by safety filters' }))
+      .toBe(CONTENT_FILTER_CODE)
+  })
+
+  it('annotates content filter errors with helpful diagnostic guidance (#6476)', async () => {
+    const server = await mockServer([{
+      kind: 'http-error',
+      status: 400,
+      body: JSON.stringify({
+        error: {
+          message: 'Content Exists Risk',
+          type: 'invalid_request_error',
+          code: 'invalid_request_error',
+        },
+      }),
+    }])
+    const ctx = await harness(server.url)
+    const result = await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
+    expect(result.finish.kind).toBe('error')
+    if (result.finish.kind !== 'error') throw new Error('expected an error finish')
+    expect(result.finish.failure.code).toBe(CONTENT_FILTER_CODE)
+    expect(result.finish.failure.message).toContain('Content Exists Risk; request blocked by provider content safety filter')
   })
 
   it('keeps the status-line message for JSON error bodies without a message', async () => {
