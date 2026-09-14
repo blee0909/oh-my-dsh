@@ -336,4 +336,30 @@ describe('windows-acl write grants (LocalSandboxProvider)', () => {
       cleanup()
     }
   })
+
+  it('re-materializes a fresh temp capability when the cached directory disappears (#6483)', async () => {
+    try {
+      const { sandbox, fiber } = await setup()
+      const ws = workspaceRoot()
+      scratch.push(ws)
+      const policy: SandboxPolicy = { mode: 'workspace-write', workspaceRoot: ws, sessionId: SessionId('sess-heal') }
+
+      const firstConfined = sandbox.confine(['pwsh', '/Command', 'x'], policy)
+      const firstTempDir = flag(firstConfined.argv, '--temp') ?? ''
+      expect(existsSync(firstTempDir)).toBe(true)
+
+      // Simulate temp directory disappearing out-of-band (e.g. OS cleanup or Storage Sense)
+      rmSync(firstTempDir, { recursive: true, force: true })
+      expect(existsSync(firstTempDir)).toBe(false)
+
+      const secondConfined = sandbox.confine(['pwsh', '/Command', 'x'], policy)
+      const secondTempDir = flag(secondConfined.argv, '--temp') ?? ''
+      expect(secondTempDir).not.toBe(firstTempDir)
+      expect(existsSync(secondTempDir)).toBe(true)
+
+      await fiber.dispose()
+    } finally {
+      cleanup()
+    }
+  })
 })
