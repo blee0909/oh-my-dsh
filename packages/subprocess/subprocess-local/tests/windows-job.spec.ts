@@ -145,11 +145,18 @@ describe('Windows parent runner contract', () => {
     ], expect.objectContaining({
       cwd: process.cwd(),
       stdio: ['ignore', 'ignore', 'ignore', 'ipc', 'pipe', 'pipe', 2],
+      windowsHide: true,
     }))
     expect(child.sent).toEqual([{ type: 'start', cwd: 'C:\\target', env: { TARGET: 'yes' } }])
     expect(result.stdin).toBe(child.targetStdin)
     expect(result.stdout).toBe(child.targetStdout)
     expect(result.stderr).toBe(child.targetStderr)
+  })
+
+  it('sets windowsHide: true when launching the Windows runner process (#6636)', () => {
+    const { spawn } = launch()
+    const options = spawn.mock.calls[0]?.[2] as { windowsHide?: boolean }
+    expect(options.windowsHide).toBe(true)
   })
 
   it('carries a null-device fd 4 for ignored stdin and closes the parent descriptor after spawn', () => {
