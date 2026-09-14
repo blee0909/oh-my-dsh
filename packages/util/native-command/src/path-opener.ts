@@ -11,7 +11,6 @@
 
 import { release as osRelease } from 'node:os'
 import { dirname, extname } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { runNativeCommand, type NativeCommandRunner } from './runner.ts'
 
 /** Testable command boundary; native implementations never invoke a shell. */
@@ -244,10 +243,8 @@ export async function revealNativePath(
       windowsPath = translated.stdout.replace(/[\r\n]+$/, '')
       if (windowsPath === '') throw new Error('wslpath returned no Windows path')
     }
-    // Explorer parses commas itself; a file URI preserves commas and whitespace in the path.
-    const target = pathToFileURL(windowsPath, { windows: true }).href.replaceAll(',', '%2C')
     try {
-      await run('explorer.exe', ['/select,', target], signal)
+      await run('explorer.exe', [`/select,${windowsPath}`], signal)
     } catch (error) {
       signal.throwIfAborted()
       // Explorer can exit 1 after delegating to the existing desktop process.
