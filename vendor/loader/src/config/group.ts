@@ -24,23 +24,12 @@ export class EntryGroup {
 
   async create(options: Omit<EntryOptions, 'id'>) {
     const id = this.tree.ensureId(options)
-    const existing = this.tree.store[id]
-    const entry: Entry = existing ?? (this.tree.store[id] = new Entry(this.ctx.loader))
-    const previousParent = entry.parent
+    const entry: Entry = this.tree.store[id] ??= new Entry(this.ctx.loader)
     // Entry may be moved from another group,
     // so we need to update the parent reference.
     entry.parent = this
     // Use `create: true` to replace existing entry.options.
-    try {
-      await entry.update(options, true, true)
-    } catch (error) {
-      if (existing) {
-        entry.parent = previousParent
-      } else {
-        delete this.tree.store[id]
-      }
-      throw error
-    }
+    await entry.update(options, true, true)
     return entry.id
   }
 
@@ -50,10 +39,10 @@ export class EntryGroup {
     if (index >= 0) config.splice(index, 1)
   }
 
-  async remove(id: string, isDispose = false) {
+  remove(id: string, isDispose = false) {
     const entry = this.tree.store[id]
     if (!entry) return
-    await entry._dispose()
+    entry.fiber?.dispose()
     if (!isDispose) {
       this.unlink(entry.options)
     }
@@ -62,87 +51,65 @@ export class EntryGroup {
   }
 
   async update(config: EntryOptions[]) {
+    if (this.ctx.fiber.uid === null) return
     const oldConfig = this.data as EntryOptions[]
-    const seen = new Set<string>()
-    for (const options of config) {
-      const id = this.tree.ensureId(options)
-      if (seen.has(id)) throw new TypeError(`duplicate loader entry id: ${id}`)
-      seen.add(id)
-    }
     const oldMap = Object.fromEntries(oldConfig.map(options => [options.id, options]))
-    const newMap = Object.fromEntries(config.map(options => [options.id, options]))
+    const newMap = Object.fromEntries(config.map(options => [options.id ?? Symbol('anonymous'), options]))
 
-    try {
-      const outcomes = await Promise.allSettled(config.map(options => this.create(options)))
-      // Disposal owns termination: sibling starts can still be settling after
-      // the containing tree has gone away, but their failures no longer
-      // describe a live update to roll back.
+    const policy = this.effectiveTolerateEntryFailures
+    const isTolerated = (options: EntryOptions, error: unknown): boolean => {
+      if (typeof policy === 'function') return policy(options, error)
+      return Boolean(policy)
+    }
+
+    const createdIds: string[] = []
+    const fatalFailures: unknown[] = []
+
+    // update inner plugins
+    const ids = Reflect.ownKeys({ ...oldMap, ...newMap }) as string[]
+    for (const id of ids) {
       if (this.ctx.fiber.uid === null) return
-      const rejected: { options: EntryOptions; error: unknown }[] = []
-      for (let i = 0; i < outcomes.length; i++) {
-        const outcome = outcomes[i]!
-        if (outcome.status === 'rejected') {
-          rejected.push({ options: config[i]!, error: outcome.reason })
-        }
-      }
-
-      const policy = this.effectiveTolerateEntryFailures
-      const isTolerated = (options: EntryOptions, error: unknown): boolean => {
-        if (typeof policy === 'function') return policy(options, error)
-        return Boolean(policy)
-      }
-
-      const fatalFailures: unknown[] = []
-      for (const { options, error } of rejected) {
-        if (policy && isTolerated(options, error)) {
-          options.disabled = true
-          try {
-            await this.create(options)
-          } catch {
-            // Ignore if creation of disabled placeholder fails
-          }
-          this.context.emit('loader/entry-failed', options, error)
-          if (this.tree.enableLogs) {
-            this.context.logger?.warn?.(`[loader] tolerated entry failure for ${options.id} (${options.name}):`, error)
-          }
-        } else {
-          fatalFailures.push(error)
-        }
-      }
-
-      if (fatalFailures.length === 1) throw fatalFailures[0]
-      if (fatalFailures.length > 1) throw new AggregateError(fatalFailures, 'loader entries failed to apply')
-      for (const id of Object.keys(oldMap)) {
-        if (!newMap[id]) await this.remove(id, true)
-      }
-      this.data = config
-
-    } catch (error) {
-      const rollbackErrors: unknown[] = []
-      for (const id of Object.keys(newMap).reverse()) {
-        if (oldMap[id]) continue
+      if (newMap[id]) {
+        const options = newMap[id]
         try {
-          await this.remove(id, true)
-        } catch (rollbackError) {
-          rollbackErrors.push(rollbackError)
+          await this.create(options)
+          createdIds.push(options.id ?? String(id))
+        } catch (error) {
+          if (this.ctx.fiber.uid === null) return
+          if (policy && isTolerated(options, error)) {
+            this.context.emit('loader/entry-failed', options, error)
+            this.ctx.logger.error(error)
+          } else {
+            fatalFailures.push(error)
+          }
+        }
+      } else {
+        this.remove(id)
+      }
+    }
+
+    if (this.ctx.fiber.uid === null) return
+
+    if (fatalFailures.length > 0) {
+      for (const id of createdIds.reverse()) {
+        if (!oldMap[id]) {
+          try { this.remove(id, true) } catch {}
         }
       }
       for (const options of oldConfig) {
-        try {
-          await this.create(options)
-        } catch (rollbackError) {
-          rollbackErrors.push(rollbackError)
-        }
+        try { await this.create(options) } catch {}
       }
       this.data = oldConfig
-      if (rollbackErrors.length) throw new AggregateError([error, ...rollbackErrors], 'loader entry rollback failed')
-      throw error
+      if (fatalFailures.length === 1) throw fatalFailures[0]
+      throw new AggregateError(fatalFailures, 'loader entries failed to apply')
     }
+
+    this.data = config
   }
 
-  async stop() {
+  stop() {
     for (const options of this.data) {
-      await this.remove(options.id, true)
+      this.remove(options.id, true)
     }
   }
 }
@@ -154,7 +121,9 @@ export class Group extends EntryGroup {
 
   constructor(public ctx: Context, public config: EntryOptions[]) {
     super(ctx, ctx.fiber.entry!.parent.tree)
-    ctx.on('internal/update', config => this.update(config))
+    ctx.on('internal/update', (config) => {
+      this.update(config)
+    })
   }
 
   async* [Service.init]() {

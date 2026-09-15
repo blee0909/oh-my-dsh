@@ -74,8 +74,8 @@ describe('Plugin Quarantine & Safe Mode (#5426)', () => {
       '',
     ].join('\n'))
 
-    // Default boot (without safe-mode option) must throw!
-    await expect(boot(NAME, join(dir, 'cordis.yml'))).rejects.toThrow(/broken.*Fatal in strict mode/)
+    // Strict mode must throw!
+    await expect(boot(NAME, join(dir, 'cordis.yml'), undefined, undefined, undefined, { faultTolerance: 'strict' })).rejects.toThrow(/broken.*Fatal in strict mode/)
   })
 
   it('fails loud even in safe-mode when a declared essential entry fails', async () => {

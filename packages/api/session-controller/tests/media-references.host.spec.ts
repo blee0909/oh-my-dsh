@@ -172,8 +172,13 @@ describe('SessionMediaReferences /api/file', () => {
       await writeFile(path, PNG_BYTES)
       expect(await responseBytes(await route.call(path))).toEqual(PNG_BYTES)
       const link = join(root, 'linked.png')
-      await symlink(path, link)
-      expect(await responseBytes(await route.call(link))).toEqual(PNG_BYTES)
+      try {
+        await symlink(path, link)
+        expect(await responseBytes(await route.call(link))).toEqual(PNG_BYTES)
+      } catch (error: unknown) {
+        if (process.platform === 'win32' && (error as NodeJS.ErrnoException | null)?.code === 'EPERM') return
+        throw error
+      }
     } finally {
       await rm(outside, { recursive: true, force: true })
     }

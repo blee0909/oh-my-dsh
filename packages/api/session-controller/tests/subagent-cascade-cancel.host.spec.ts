@@ -120,16 +120,16 @@ describe('Subagent Cascading Cancellation & Lifecycle Governance', () => {
     const grandChild1 = createMockAgent(ctx, 'tree-grandchild-1')
 
     ctx.agents.enter(rootAgent, undefined)
-    ctx.agents.announce(rootAgent)
+    await ctx.agents.announce(rootAgent, 'startup')
 
     ctx.agents.enter(child1, rootAgent)
-    ctx.agents.announce(child1)
+    await ctx.agents.announce(child1, 'startup')
 
     ctx.agents.enter(child2, rootAgent)
-    ctx.agents.announce(child2)
+    await ctx.agents.announce(child2, 'startup')
 
     ctx.agents.enter(grandChild1, child1)
-    ctx.agents.announce(grandChild1)
+    await ctx.agents.announce(grandChild1, 'startup')
 
     const descendants = collectDescendantsPostOrder(ctx, rootAgent)
 
@@ -149,13 +149,13 @@ describe('Subagent Cascading Cancellation & Lifecycle Governance', () => {
     const grandchild = createMockAgent(ctx, 'cascade-grandchild')
 
     ctx.agents.enter(rootAgent, undefined)
-    ctx.agents.announce(rootAgent)
+    await ctx.agents.announce(rootAgent, 'startup')
 
     ctx.agents.enter(child, rootAgent)
-    ctx.agents.announce(child)
+    await ctx.agents.announce(child, 'startup')
 
     ctx.agents.enter(grandchild, child)
-    ctx.agents.announce(grandchild)
+    await ctx.agents.announce(grandchild, 'startup')
 
     const cancelCallOrder: string[] = []
     vi.mocked(grandchild.cancel).mockImplementation(() => {
@@ -194,13 +194,13 @@ describe('Subagent Cascading Cancellation & Lifecycle Governance', () => {
     const branchB = createMockAgent(ctx, 'branch-b')
 
     ctx.agents.enter(root, undefined)
-    ctx.agents.announce(root)
+    await ctx.agents.announce(root, 'startup')
 
     ctx.agents.enter(branchA, root)
-    ctx.agents.announce(branchA)
+    await ctx.agents.announce(branchA, 'startup')
 
     ctx.agents.enter(branchB, root)
-    ctx.agents.announce(branchB)
+    await ctx.agents.announce(branchB, 'startup')
 
     const cancelResult = await remote.cancel({ sessionId: branchA.id })
 

@@ -998,7 +998,7 @@ function descriptors(): InvocationDescriptor[] {
     name: 'label',
     wire: 'label',
     source: 'json' as const,
-    codec: { mode: 'strict' as const, typeSymbol: '@fixture/feed#Label', schema: z.string() },
+    codec: { mode: 'strict' as const, typeSymbol: '@fixture/feed#Label', create: () => z.string() },
   }
   const stream = (method: string, parameters: InvocationDescriptor['parameters'], schema: z.ZodType): InvocationDescriptor => ({
     id: `@fixture/feed#feed/${method}`,
@@ -1008,7 +1008,7 @@ function descriptors(): InvocationDescriptor[] {
     mode: 'stream',
     invocation: { kind: 'direct' },
     parameters,
-    result: { mode: 'strict', typeSymbol: '@fixture/feed#Item', schema },
+    result: { mode: 'strict', typeSymbol: '@fixture/feed#Item', create: () => schema },
   })
   return [
     { ...stream('follow', [label], z.string()), cancellation: { parameter: 'signal' } },
@@ -1026,7 +1026,7 @@ function descriptors(): InvocationDescriptor[] {
       method: 'unary',
       invocation: { kind: 'direct' },
       parameters: [label],
-      result: { mode: 'strict', typeSymbol: '@fixture/feed#Item', schema: z.string() },
+      result: { mode: 'strict', typeSymbol: '@fixture/feed#Item', create: () => z.string() },
     },
   ]
 }
