@@ -218,9 +218,23 @@ export function initProfile(
   if (!existsSync(workspacePath)) writeFileSync(workspacePath, PROFILE_PNPM_WORKSPACE)
 }
 
+/**
+ * Strip leading UTF-8 byte order mark (\uFEFF) if present.
+ * @param text - source text that may contain a leading BOM.
+ * @returns text without a leading BOM.
+ */
+export function stripBom(text: string): string {
+  return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text
+}
+
+/** Read and parse a JSON file, transparently stripping any UTF-8 BOM. */
+function readJsonFile<T>(path: string): T {
+  return JSON.parse(stripBom(readFileSync(path, 'utf8'))) as T
+}
+
 function readModuleProxyRecord(link: string): ModuleProxyRecord | undefined {
   try {
-    return JSON.parse(readFileSync(join(link, 'package.json'), 'utf8')) as ModuleProxyRecord
+    return readJsonFile<ModuleProxyRecord>(join(link, 'package.json'))
   } catch {
     // Missing or invalid metadata is not managed state; callers reject it.
     return undefined
@@ -356,14 +370,14 @@ function packageProxySource(
   packageName: string,
   packageDir: string,
 ): { version: string; targets: Record<string, string> } {
-  const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
+  const manifest = readJsonFile<{
     bin?: unknown
     exports?: unknown
     main?: unknown
     types?: unknown
     typings?: unknown
     version?: unknown
-  }
+  }>(join(packageDir, 'package.json'))
   if (typeof manifest.version !== 'string' || manifest.version.length === 0) {
     throw new Error(`dsh: installed package ${packageName} must declare a non-empty version`)
   }
@@ -461,7 +475,7 @@ type ModuleFallbackEntry =
 
 /** Read one package manifest used while traversing a module-fallback dependency graph. */
 function readModuleFallbackManifest(anchor: string): ProfileManifest {
-  return JSON.parse(readFileSync(anchor, 'utf8')) as ProfileManifest
+  return readJsonFile<ProfileManifest>(anchor)
 }
 
 /** Return dependency names that may be imported by a loader-visible plugin. */
@@ -750,12 +764,16 @@ export function readProfileManifest(binName: string, dir: string): ProfileManife
   } catch (error) {
     throw new Error(`${binName}: failed to read profile manifest ${path}: ${String(error)}`)
   }
-  // The field checks below validate the file data before trusting the parse type.
-  const parsed = JSON.parse(raw) as ProfileManifest | null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stripBom(raw))
+  } catch (error) {
+    throw new Error(`${binName}: profile manifest ${path} is not valid JSON: ${String(error)}`)
+  }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error(`${binName}: profile manifest ${path} must hold a JSON object`)
   }
-  return parsed
+  return parsed as ProfileManifest
 }
 
 /**
@@ -875,7 +893,7 @@ export function loadProfileDirectory(
   const patchReload = rawPatchReload ?? DEFAULT_PROFILE_PATCH_RELOAD
   const layers = bundles.map((packageName): ProfileLayer => {
     const packageDir = resolveBundleDir(binName, packageName, installAnchor, dir)
-    const bundleManifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as ProfileManifest
+    const bundleManifest = readJsonFile<ProfileManifest>(join(packageDir, 'package.json'))
     const declared = bundleManifest.dsh?.bundle?.patch
     if (declared === undefined) {
       throw new Error(`${binName}: profile bundle ${JSON.stringify(packageName)} declares no dsh.bundle in its package.json`)

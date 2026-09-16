@@ -44,6 +44,7 @@ export {
   readProfileManifest,
   resolveBundleDir,
   resolveProfileDir,
+  stripBom,
   writeProfileManifest,
   type Profile,
   type ProfileLayer,

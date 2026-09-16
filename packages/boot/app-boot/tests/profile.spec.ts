@@ -23,6 +23,7 @@ import {
   readProfileManifest,
   resolveBundleDir,
   resolveProfileDir,
+  stripBom,
   writeProfileManifest,
   type Profile,
 } from '../src/index.ts'
@@ -126,6 +127,29 @@ describe('manifest round-trip', () => {
     writeFileSync(join(dir, 'package.json'), '[]')
     expect(() => readProfileManifest('t', dir)).toThrow('must hold a JSON object')
     expect(() => readProfileManifest('t', join(dir, 'nope'))).toThrow('failed to read profile manifest')
+  })
+
+  it('tolerates UTF-8 BOM in profile manifest transparently (#6758)', () => {
+    const dir = tmp()
+    const bomManifest = '\uFEFF' + JSON.stringify({ name: 'bom-profile', dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } }, null, 2)
+    writeFileSync(join(dir, 'package.json'), bomManifest, 'utf8')
+    const manifest = readProfileManifest('t', dir)
+    expect(manifest.name).toBe('bom-profile')
+    expect(manifest.dsh?.profile?.bundles).toEqual(['@deepseek-ai/dsh-base'])
+  })
+
+  it('fails with informative error when manifest JSON syntax is invalid (#6758)', () => {
+    const dir = tmp()
+    writeFileSync(join(dir, 'package.json'), '{ "name": unquoted }', 'utf8')
+    expect(() => readProfileManifest('dsh', dir)).toThrow('profile manifest')
+    expect(() => readProfileManifest('dsh', dir)).toThrow('is not valid JSON')
+  })
+
+  it('stripBom helper safely removes leading BOM only (#6758)', () => {
+    expect(stripBom('\uFEFFhello')).toBe('hello')
+    expect(stripBom('hello')).toBe('hello')
+    expect(stripBom('')).toBe('')
+    expect(stripBom('\uFEFF')).toBe('')
   })
 })
 
