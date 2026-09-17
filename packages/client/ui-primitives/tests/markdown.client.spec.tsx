@@ -87,7 +87,7 @@ describe('MarkdownText', () => {
       '`**注意：**内容`',
       '**Notice:**text',
       '*提醒！*继续',
-      '$**注意：**内容$',
+      String.raw`\(**注意：**内容\)`,
       '```md',
       '**注意：**内容',
       '```',
@@ -318,13 +318,13 @@ describe('MarkdownText', () => {
 
   it('renders inline and display TeX through KaTeX without enabling trusted commands', () => {
     const source = [
-      'Einstein wrote $E = mc^2$.',
+      'Einstein wrote \\(E = mc^2\\).',
       '',
       '$$',
       '\\frac{\\partial \\mathbf{u}}{\\partial t} + (\\mathbf{u} \\cdot \\nabla)\\mathbf{u} = -\\frac{1}{\\rho}\\nabla p',
       '$$',
       '',
-      '$\\href{javascript:alert(1)}{unsafe}$',
+      '\\(\\href{javascript:alert(1)}{unsafe}\\)',
     ].join('\n')
     const { container } = render(<MarkdownText text={source} />)
 
@@ -336,7 +336,7 @@ describe('MarkdownText', () => {
 
   it('renders common TeX delimiters and same-line tagged display blocks after the reply settles', () => {
     const source = [
-      'Inline dollar $\\theta$ and backslash \\(\\frac{1}{5}\\).',
+      'Inline dollar \\(\\theta\\) and backslash \\(\\frac{1}{5}\\).',
       '',
       '\\[\\frac{\\pi}{4} < \\theta < \\frac{\\pi}{2}\\]',
       '',
@@ -344,7 +344,7 @@ describe('MarkdownText', () => {
       '',
       '| Symbol | Value |',
       '| --- | --- |',
-      '| $\\theta$ | \\(\\frac{1}{5}\\) |',
+      '| \\(\\theta\\) | \\(\\frac{1}{5}\\) |',
     ].join('\n')
     const { container } = render(<MarkdownText text={source} />)
 
@@ -502,6 +502,19 @@ describe('MarkdownText', () => {
     expect(live.container.querySelectorAll('.katex')).toHaveLength(1)
     expect(live.container.querySelectorAll('.katex-display')).toHaveLength(1)
     expect(live.container.querySelector('.katex-error')).toBeNull()
+  })
+
+  it('does not corrupt currency amounts and shell variables as inline math (Discussions #6791)', () => {
+    const source = [
+      'tek tasarım için $1.64, diğer ikisi toplam $0.62.',
+      '',
+      'Values: $10 … $20 and $HOME with $PATH.',
+    ].join('\n\n')
+    const { container } = render(<MarkdownText text={source} />)
+
+    expect(container.querySelectorAll('.katex')).toHaveLength(0)
+    expect(container.textContent).toContain('tek tasarım için $1.64, diğer ikisi toplam $0.62.')
+    expect(container.textContent).toContain('Values: $10 … $20 and $HOME with $PATH.')
   })
 })
 
