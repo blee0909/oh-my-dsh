@@ -33,7 +33,7 @@ interface ResolvedConfig {
   description: string
 }
 
-interface CommandMarkers {
+export interface CommandMarkers {
   start: string
   end: string
 }
@@ -61,7 +61,7 @@ function maybeTruncate(content: string, maxOutputChars: number, incomplete = fal
     : content.slice(0, maxOutputChars) + TRUNCATED_MESSAGE
 }
 
-function markers(): CommandMarkers {
+export function markers(): CommandMarkers {
   const nonce = randomUUID()
   return {
     start: `__DSH_PERSISTENT_BASH_START_${nonce}__`,
@@ -69,7 +69,7 @@ function markers(): CommandMarkers {
   }
 }
 
-function quoteForBash(value: string): string {
+export function quoteForBash(value: string): string {
   return `$'${value
     .replaceAll('\\', '\\\\')
     .replaceAll("'", "\\'")
@@ -77,7 +77,7 @@ function quoteForBash(value: string): string {
     .replaceAll('\n', '\\n')}'`
 }
 
-function wrapCommand(command: string, marker: CommandMarkers): string {
+export function wrapCommand(command: string, marker: CommandMarkers): string {
   // Keep the wrapper on one physical line. An interactive bash prints PS2 for
   // embedded newlines before executing the buffer, which would leak terminal
   // prompts and marker source text into the model-facing result.
@@ -265,10 +265,12 @@ function persistentShells(ctx: Context, config: ResolvedConfig): PersistentShell
             live.delete(owner)
           }, 'tool-bash-persistent owner cache cleanup')
         }
-        // Echo suppression only: the prompt stays the backend's own, so the
-        // backend's prompt-based readiness detection keeps working.
+        // Echo suppression and history expansion disablement: turn off history
+        // expansion (set +H) so commands with bare ! (e.g. Swift unwrapping or
+        // logic negations) are not discarded by interactive readline (Discussions #6768).
+        // 2>/dev/null || true ensures non-bash POSIX shells do not error on +H.
         const setup = ctx.terminals.startSend(owner, spawned.sessionId, {
-          text: 'stty -echo',
+          text: 'stty -echo; set +H 2>/dev/null || true',
           submit: true,
           signal: combinedSignal,
         })

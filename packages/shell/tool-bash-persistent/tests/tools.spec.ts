@@ -110,6 +110,7 @@ class StubPtySession implements TerminalBackendSession {
   closed: string[] = []
   mode: StubMode
   sends = 0
+  sentCommands: string[] = []
   pendingText = ''
   historyTruncated = false
   throwOnSend = false
@@ -120,6 +121,7 @@ class StubPtySession implements TerminalBackendSession {
 
   startSend(request: TerminalSendRequest): TerminalSendOperation {
     this.sends += 1
+    this.sentCommands.push(request.text)
     if (request.text.startsWith('stty -echo')) {
       if (this.mode === 'init-exit') {
         this.statusValue = { kind: 'exited', exitCode: 1, signal: null }
@@ -600,5 +602,32 @@ describe('tool-bash-persistent', () => {
     expect(() => {
       ToolBashPersistent.apply(new Context(), { description: ' ' })
     }).toThrow('description must be non-empty')
+  })
+
+  it('initializes persistent shell with set +H to disable history expansion (#6768)', async () => {
+    const { ctx, owner, stub } = await setup()
+    const result = await call(ctx, owner, 'echo "hi!"')
+    expect(result.isError).toBe(false)
+    expect(text(result)).toContain('hello from stub')
+    expect(stub.sessions).toHaveLength(1)
+    const session = stub.sessions[0]
+    expect(session).toBeDefined()
+    expect(session?.sentCommands[0]).toBe('stty -echo; set +H 2>/dev/null || true')
+    expect(session?.sentCommands[1]).toContain('eval -- $\'echo "hi!"\'')
+  })
+
+  it('quotes and wraps commands preserving bare exclamation mark and escapes (#6768)', () => {
+    const marker = ToolBashPersistent.markers()
+    const wrapped = ToolBashPersistent.wrapCommand('echo "hi!"', marker)
+    expect(wrapped).toContain('eval -- $\'echo "hi!"\'')
+    expect(wrapped).toContain(marker.start)
+    expect(wrapped).toContain(marker.end)
+
+    expect(ToolBashPersistent.quoteForBash('hi!')).toBe("$'hi!'")
+    expect(ToolBashPersistent.quoteForBash('swift -e "URL()!"')).toBe('$\'swift -e "URL()!"\'')
+    expect(ToolBashPersistent.quoteForBash('line1\nline2')).toBe("$'line1\\nline2'")
+    expect(ToolBashPersistent.quoteForBash('line1\r\nline2')).toBe("$'line1\\r\\nline2'")
+    expect(ToolBashPersistent.quoteForBash('back\\slash')).toBe("$'back\\\\slash'")
+    expect(ToolBashPersistent.quoteForBash("single'quote")).toBe("$'single\\'quote'")
   })
 })
