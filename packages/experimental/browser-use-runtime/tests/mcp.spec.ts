@@ -61,7 +61,7 @@ class PresentationRuntime extends PtcRuntime {
   run(): Promise<never> { return Promise.reject(new Error('Unexpected PTC execution in a presentation test')) }
 }
 
-async function load(exclusive = false, mode?: string, toolCallTimeoutMs?: number, toolOrder?: string[]) {
+async function load(exclusive = false, mode?: string, toolCallTimeoutMs?: number, toolOrder?: string[], required?: boolean) {
   const root = await mkdtemp(join(tmpdir(), 'dsh-browser-mcp-'))
   roots.push(root)
   const model = new FixtureModel()
@@ -70,7 +70,7 @@ async function load(exclusive = false, mode?: string, toolCallTimeoutMs?: number
     ['sessions', Sessions], ['agents', Agents], ['loop', AgentLoop], ['projections', Projections],
     ['model', { inject: ['llm'], apply(ctx: Context) { ctx.effect(() => ctx.llm.registerAdapter(['fixture'], model)) } }],
     ['browser', { inject: ['browserUse', 'agents', 'tools', 'systemPrompt'], apply(ctx: Context) {
-      mountSessionMcp(ctx, { name: 'browser-fixture', exclusive, command: process.execPath, args: [fixture, root, ...mode === undefined ? [] : [mode]], ...toolCallTimeoutMs === undefined ? {} : { toolCallTimeoutMs, env: {} } })
+      mountSessionMcp(ctx, { name: 'browser-fixture', exclusive, command: process.execPath, args: [fixture, root, ...mode === undefined ? [] : [mode]], ...toolCallTimeoutMs === undefined ? {} : { toolCallTimeoutMs, env: {} }, ...required === undefined ? {} : { required } })
     } }],
   ])
   const configPath = join(root, 'cordis.yml')
@@ -263,7 +263,7 @@ describe('Session MCP Loader composition', () => {
   })
 
   it('rolls back failed discovery and stops a child when unload interrupts discovery', async () => {
-    const failed = await load(false, 'fail', undefined, [TOOL, '<unlisted-tools>'])
+    const failed = await load(false, 'fail', undefined, [TOOL, '<unlisted-tools>'], true)
     let failedAgent!: Agent
     const laterListener = vi.fn()
     await expect(failed.ctx.agents.create({
@@ -294,6 +294,54 @@ describe('Session MCP Loader composition', () => {
     for (const { pid } of (await events(held.root)).filter(event => event.event === 'start')) {
       expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
     }
+  })
+
+  it('degrades gracefully without browser tools when optional browser MCP discovery fails', async () => {
+    const degraded = await load(false, 'fail')
+    registerIndependentTool(degraded.ctx)
+    let initializedAgent!: Agent
+    const laterListener = vi.fn()
+    const handle = await degraded.ctx.agents.create({
+      sessionId: SessionId('degraded-session'), agentOptions: { provider: 'fixture', model: 'fixture' },
+      setup: (inner, agent) => {
+        initializedAgent = agent
+        inner.on('agent/created', laterListener)
+      },
+    })
+    expect(handle.agent).toBe(initializedAgent)
+    expect(laterListener).toHaveBeenCalled()
+    expect(degraded.ctx.agents.get(SessionId('degraded-session'))).toBe(handle.agent)
+    expect(degraded.ctx.sessions.get(SessionId('degraded-session'))).toBeDefined()
+
+    // Browser tools are masked out
+    expect(degraded.ctx.tools.schemas(handle.agent).some(tool => tool.name === TOOL)).toBe(false)
+    expect(degraded.ctx.tools.schemas(handle.agent).map(tool => tool.name)).toEqual(['unrelated'])
+
+    // Prompt assembly excludes browser MCP section
+    const prompt = await warm(degraded.ctx, handle.agent)
+    expect(renderPrompt(prompt)).not.toContain('BROWSER_FIXTURE_INSTRUCTION')
+    expect(prompt.tools.map(tool => tool.name)).toEqual(['unrelated'])
+
+    // Normal conversation turn proceeds using non-browser capabilities
+    handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Talk without browser.' }], source: { kind: 'user' } }))
+    await handle.agent.whenIdle()
+    expect(degraded.model.requests).toHaveLength(1)
+    expect(degraded.model.requests[0]?.tools?.map(tool => tool.name)).toEqual(['unrelated'])
+
+    // Attempting direct execution of browser tool throws error identifying startup failure
+    const execResult = await execute(degraded.ctx, handle.agent)
+    expect(execResult.isError).toBe(true)
+
+    // Unrelated tool remains executable
+    expect((await execute(degraded.ctx, handle.agent, 'unrelated')).content).toEqual([{ type: 'text', text: 'Independent.' }])
+
+    // Dispose the live handle, then recreate/resume the session — resume also succeeds in degraded mode
+    await handle.dispose()
+    const resumed = await degraded.ctx.agents.create({ sessionId: SessionId('degraded-session') })
+    expect(resumed.agent).toBeDefined()
+    expect(degraded.ctx.tools.schemas(resumed.agent).some(tool => tool.name === TOOL)).toBe(false)
+    expect((await execute(degraded.ctx, resumed.agent)).isError).toBe(true)
+    expect((await execute(degraded.ctx, resumed.agent, 'unrelated')).content).toEqual([{ type: 'text', text: 'Independent.' }])
   })
 
   it('does not reconnect and silently replace browser state after a process exits', async () => {

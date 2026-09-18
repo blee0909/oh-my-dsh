@@ -83,10 +83,13 @@ export interface SessionMcpOptions {
   env?: Record<string, string>
   /** Per-call timeout override; omission retains the MCP client default. */
   toolCallTimeoutMs?: number
+  /** Whether MCP startup failure must abort agent creation; defaults to false (fail-soft degradation). */
+  required?: boolean
 }
 
 interface ClientState {
   status: 'ready' | 'blocked'
+  reason?: 'exclusive' | 'startup-failed'
   mask?: Scope
 }
 
@@ -185,8 +188,17 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
       refreshBlockedMasks()
       return
     }
-    await resources.get(agent, signal)
-    clients.set(agent, state)
+    try {
+      await resources.get(agent, signal)
+      clients.set(agent, state)
+    } catch (error) {
+      if (signal?.aborted || stopping || options.required) throw error
+      ctx.logger?.warn?.(`${options.name}: browser MCP startup failed, session will run without browser tools: %s`, error)
+      state.status = 'blocked'
+      state.reason = 'startup-failed'
+      clients.set(agent, state)
+      refreshBlockedMasks()
+    }
   }, { prepend: true })
   ctx.on('tools/change', refreshBlockedMasks)
   ctx.on('tools/execute', async (exec, next) => {
@@ -195,7 +207,14 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
       && (exec.arguments as { server?: unknown }).server === options.name
     if (!exec.name.startsWith(toolPrefix) && !ownResource) return next()
     const agent = exec.agent
-    if (agent === undefined || clients.get(agent)?.status !== 'ready') {
+    if (agent === undefined) {
+      throw new Error(`${options.name}: browser tool belongs to another Session`)
+    }
+    const client = clients.get(agent)
+    if (client?.status !== 'ready') {
+      if (client?.reason === 'startup-failed') {
+        throw new Error(`${options.name}: browser tool is unavailable (startup failed)`)
+      }
       throw new Error(`${options.name}: browser tool belongs to another Session`)
     }
     return resources.run(agent, exec.signal, async (_scope, combined) => {
