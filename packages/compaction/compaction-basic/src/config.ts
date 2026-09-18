@@ -4,7 +4,7 @@
  * @module @deepseek-ai/dsh-compaction-basic/config
  */
 
-import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
+import { type LlmCallConfig, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type {
   BasicCompactionConfig,
@@ -30,6 +30,7 @@ const POLICY_CONFIG_KEYS = [
   'summarizationProvider',
   'summarizationModel',
   'maxTokens',
+  'reasoningEffort',
   'compactionRetries',
   'maxOverflowRetries',
 ] as const
@@ -89,6 +90,7 @@ export function resolveConfig(config: BasicCompactionConfig = {}): ResolvedConfi
     summarizationProvider: config.summarizationProvider ?? '',
     summarizationModel: config.summarizationModel ?? '',
     maxTokens: config.maxTokens ?? 8192,
+    ...config.reasoningEffort !== undefined ? { reasoningEffort: ReasoningEffortId(config.reasoningEffort) } : {},
     compactionRetries: config.compactionRetries ?? 1,
     maxOverflowRetries: config.maxOverflowRetries ?? 1,
     modelPolicies,
@@ -112,6 +114,9 @@ export function resolveTargetPolicy(
   const inheritedRetention: ResolvedRetention = config.retainTokens === undefined
     ? { retainRatio: config.retainRatio }
     : { retainTokens: config.retainTokens }
+  const effectiveEffort = override?.reasoningEffort !== undefined
+    ? ReasoningEffortId(override.reasoningEffort)
+    : config.reasoningEffort
   return deepFreeze({
     target: { provider: target.provider, model: target.model },
     thresholdRatio: override?.thresholdRatio ?? config.thresholdRatio,
@@ -119,6 +124,7 @@ export function resolveTargetPolicy(
     summarizationProvider: override?.summarizationProvider ?? config.summarizationProvider,
     summarizationModel: override?.summarizationModel ?? config.summarizationModel,
     maxTokens: override?.maxTokens ?? config.maxTokens,
+    ...effectiveEffort !== undefined ? { reasoningEffort: effectiveEffort } : {},
     compactionRetries: override?.compactionRetries ?? config.compactionRetries,
     maxOverflowRetries: override?.maxOverflowRetries ?? config.maxOverflowRetries,
   })
@@ -161,6 +167,7 @@ export function resolveCompactSpec(
     summarizationProvider: policy.summarizationProvider,
     summarizationModel: policy.summarizationModel,
     maxTokens: policy.maxTokens,
+    ...policy.reasoningEffort !== undefined ? { reasoningEffort: policy.reasoningEffort } : {},
     compactionRetries: policy.compactionRetries,
     maxOverflowRetries: policy.maxOverflowRetries,
   })
@@ -241,6 +248,8 @@ function validatePolicy(
     throw new Error(`${name}: retainRatio and retainTokens are mutually exclusive`)
   }
   if (maxTokens !== undefined) assertPositiveInteger(`${name}.maxTokens`, maxTokens)
+  const reasoningEffort = config.reasoningEffort
+  if (reasoningEffort !== undefined) assertNonEmptyString(`${name}.reasoningEffort`, reasoningEffort)
   if (compactionRetries !== undefined) {
     assertNonNegativeInteger(`${name}.compactionRetries`, compactionRetries)
   }

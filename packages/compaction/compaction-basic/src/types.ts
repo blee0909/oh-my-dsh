@@ -4,7 +4,7 @@
  * @module @deepseek-ai/dsh-compaction-basic/types
  */
 
-import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
+import type { LlmCallConfig, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 
 /** Policy fields shared by the default policy and exact model overrides. */
 export interface CompactionPolicyConfig {
@@ -20,6 +20,8 @@ export interface CompactionPolicyConfig {
   summarizationModel?: string
   /** Provider generation cap for summarization. Defaults to `8192`. */
   maxTokens?: number
+  /** Reasoning effort for summarization (e.g. 'off', 'low', 'high'). Defaults to 'off'. */
+  reasoningEffort?: ReasoningEffortId | string
   /** Extra attempts after the first compaction when pressure remains above threshold. Defaults to `1`. */
   compactionRetries?: number
   /** Maximum retries after canonical context overflow; `0` disables recovery. Defaults to `1`. */
@@ -53,6 +55,7 @@ interface ResolvedPolicyFields {
   readonly summarizationProvider: string
   readonly summarizationModel: string
   readonly maxTokens: number
+  readonly reasoningEffort?: ReasoningEffortId
   readonly compactionRetries: number
   readonly maxOverflowRetries: number
 }
