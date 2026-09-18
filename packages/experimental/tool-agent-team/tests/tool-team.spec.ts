@@ -593,6 +593,36 @@ describe('dsh-tool-team', () => {
     await vi.waitFor(() => { expect(ctx.agents.get(ordinary.childId)).toBeUndefined() }, { timeout: 5_000 })
   })
 
+  it('does not mount Team tools or policy on fork or one-shot subagent children at agent/created', async () => {
+    const { ctx, lead } = await setup([textResponse('lead ok'), textResponse('fork ok')])
+    await runTurn(lead, 'prepare parent history')
+
+    let forkTools: string[] = []
+    let forkPolicyPresent = false
+
+    ctx.on('agent/created', async ({ agent }) => {
+      if (agent.id !== lead.id) {
+        const scope = scopeOf(agent.ctx)
+        if (scope !== undefined) {
+          const assembled = await ctx.systemPrompt.assemble({ scope })
+          forkTools = assembled.tools.map(schema => schema.name).filter(name => TOOL_NAMES.includes(name))
+          forkPolicyPresent = assembled.sections.some(s => s.name === 'team:policy')
+        }
+      }
+    })
+
+    const run = await ctx.subagents.start('fork', {
+      label: 'fork reviewer',
+      parent: lead,
+      prompt: [{ type: 'text', text: 'review' }],
+      signal: SIGNAL,
+    })
+    await run.result
+
+    expect(forkTools).toEqual([])
+    expect(forkPolicyPresent).toBe(false)
+  })
+
   it('reinstalls Team scope before a cold-resumed teammate request', async () => {
     const { ctx, lead, adapter } = await setup([textResponse('first'), 'hang', 'hang'])
     const spawned = await execute(ctx, lead, 'spawn_teammate', {

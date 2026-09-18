@@ -510,6 +510,44 @@ describe('Team identity and provisioning', () => {
     await orphanRoot.dispose()
   })
 
+  it('does not misclassify fork or subagent children as Team Leads at agent/created or before first turn', async () => {
+    const { ctx, lead } = await setup([textResponse('child done')])
+
+    let observedMembershipAtCreated: unknown
+    ctx.on('agent/created', ({ agent }) => {
+      if (agent.id !== lead.id) {
+        observedMembershipAtCreated = ctx.agentTeams.tryMembership(agent)
+      }
+    })
+
+    const started = await ctx.subagents.start('fork', {
+      label: 'fork worker',
+      parent: lead,
+      prompt: content('fork task'),
+      signal: SIGNAL,
+    })
+    expect(observedMembershipAtCreated).toBeUndefined()
+    await started.result
+
+    const subagentChild = await ctx.agents.create({
+      sessionId: SessionId('explicit-subagent-child'),
+      meta: { parentSession: lead.id, origin: 'subagent', delegationDepth: 1 },
+      agentOptions: { provider: 'mock', model: 'mock' },
+    })
+    expect(ctx.agentTeams.tryMembership(subagentChild.agent)).toBeUndefined()
+    expect(() => ctx.agentTeams.membership(subagentChild.agent))
+      .toThrow(expect.objectContaining({ code: 'TEAM_NOT_MEMBER' }))
+    await subagentChild.dispose()
+
+    const coldParentSubagent = await ctx.agents.create({
+      sessionId: SessionId('cold-parent-subagent'),
+      meta: { parentSession: SessionId('absent-parent'), origin: 'subagent' },
+      agentOptions: { provider: 'mock', model: 'mock' },
+    })
+    expect(ctx.agentTeams.tryMembership(coldParentSubagent.agent)).toBeUndefined()
+    await coldParentSubagent.dispose()
+  })
+
   it('does not reinterpret an orphaned provider child or malformed parent stream as a Team root', async () => {
     const first = await setup([textResponse('ordinary child done')])
     const parent = await first.ctx.agents.create({

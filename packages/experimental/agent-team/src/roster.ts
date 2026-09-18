@@ -101,17 +101,19 @@ export class TeamRoster {
             return { root, id: TeamId(root.id), role: 'teammate', name: member.name }
           }
           // A direct child outside the durable roster is not a teammate. Ordinary
-          // host forks are independent roots; subagent descriptors distinguish
-          // provider-owned workers that must not receive a nested Team identity.
-          if (this.subagentDescriptor(agent)) return undefined
+          // host forks are independent roots; subagent descriptors and header
+          // lineage distinguish provider-owned workers that must not receive a
+          // nested Team identity.
+          if (this.isSubagent(agent)) return undefined
           return { root: agent, id: TeamId(agent.id), role: 'lead', name: 'lead' }
         }
+        if (this.isSubagent(agent)) return undefined
       }
       // A continuation can briefly outlive its parent during child-first teardown.
       // Do not reinterpret that durable child as a new implicit root Team. A host-
       // resumed ordinary fork has no descriptor in its own suffix and remains a
       // valid new root whose inherited Team records stay outside its projected Team state.
-      if (this.subagentDescriptor(agent)) return undefined
+      if (this.isSubagent(agent)) return undefined
       return { root: agent, id: TeamId(agent.id), role: 'lead', name: 'lead' }
     } catch {
       // This method is used by lifecycle observers and teardown discovery. A
@@ -485,5 +487,12 @@ export class TeamRoster {
   private subagentDescriptor(agent: Agent): boolean {
     // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
     return foldSubagentDescriptor(agent.session.snapshotEvents(agent.session.inheritedEventCount)) !== undefined
+  }
+
+  /** Whether an Agent identifies a provider-owned subagent child. */
+  private isSubagent(agent: Agent): boolean {
+    return agent.session.header.origin === 'subagent'
+      || (agent.session.header.delegationDepth ?? 0) > 0
+      || this.subagentDescriptor(agent)
   }
 }
