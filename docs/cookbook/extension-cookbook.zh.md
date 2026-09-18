@@ -93,6 +93,43 @@ export function apply(ctx: Context) {
 }
 ```
 
+<a id="an-auxiliary-llm-call-structured-output--utility-task"></a>
+
+## 辅助 LLM 调用（结构化输出 / 工具任务）
+
+当插件通过 `ctx.llm.stream()` 或 `ctx.llm.generate()` 执行辅助工具类任务（如实体抽取、文本翻译、分类打标或卡片生成）时，请显式传入 `reasoningEffort: 'off'` 关闭推理。在思考型模型上，内部推理 token 与正文输出共用同一个 `maxTokens` 预算；若不显式关闭推理，思考过程可能会在输出正文前耗尽全部预算且不抛出任何异常，导致静默饥饿。务必为 `maxTokens` 预留充足裕量，并将空解析结果视为可重试的失败。
+
+```ts
+import type { Context } from '@deepseek-ai/cordis'
+import type { GenerateOptions, LlmRuntime } from '@deepseek-ai/dsh-llm'
+
+export async function collectStructuredOutput(
+  llm: LlmRuntime,
+  options: Omit<GenerateOptions, 'reasoningEffort'> & { reasoningEffort?: GenerateOptions['reasoningEffort'] },
+  signal?: AbortSignal,
+): Promise<string> {
+  // Explicitly default to 'off' for rule-following auxiliary tasks
+  const opts: GenerateOptions = {
+    ...options,
+    reasoningEffort: options.reasoningEffort ?? 'off',
+    signal,
+  }
+
+  let text = ''
+  for await (const chunk of llm.stream(opts)) {
+    if (chunk.type === 'text-delta') {
+      text += chunk.text
+    }
+  }
+
+  // Defensive guard: treat silent token starvation (empty output) as a failure
+  if (!text.trim()) {
+    throw new Error('Model produced no visible output (possible token budget exhaustion).')
+  }
+  return text
+}
+```
+
 ## 可运行的组装示例
 
 交付应用通过 `packages/bundle/*/cordis.patch.yml` 提供 profile 层，产品 `dsh` 启动器通过具名 profile 负责 Web、ACP、SDK 与一次性 headless 执行。可选的用户 overlay 位于 `apps/cli/config/examples/`；profile 集成测试位于 `apps/cli/tests/profiles/`，包专属 Loader 组合则留在对应包的测试目录中。

@@ -33,3 +33,14 @@
 ## 用 unlink 删除链接形态的路径
 
 可能是符号链接或 Windows junction 的路径，应先用 `lstatSync().isSymbolicLink()` 判断，再用 `unlinkSync` 删除：unlink 只删除链接本身并拒绝真实目录，因此绝不会跟随链接进入其目标。Windows 上对 junction 调用 `rmSync(link)` 会抛 `ERR_FS_EISDIR`；递归删除可能穿过 junction 进入其目标。真实目录才使用带 `recursive` 的 `rmSync`。
+
+<a id="disable-reasoning-for-structured-auxiliary-calls-and-guard-against-empty-completions"></a>
+
+## 结构化辅助调用显式禁用推理并防御空响应
+
+在思考型（推理）模型中，思维链（reasoning）token 与可见正文输出共享同一个 `maxTokens` 预算。辅助工具类任务（翻译、字段抽取、分类打标、测试出题、上下文压缩、会话标题）本质上是按规则执行的结构化任务，而非多步逻辑推演。若辅助调用未显式禁用推理，模型的内部思考过程极易在输出正文之前就耗尽全部 `maxTokens` 预算。由于请求以 `stop` 正常结束且不抛出任何异常，此类故障会表现为静默的空响应（“无有效输出”），极易逃脱常规 try/catch 监控。
+
+在插件或核心子系统中编写辅助 LLM 调用时：
+1. 除非任务确实需要多步推演，否则必须在请求封套中显式指定 `reasoningEffort: 'off'`，切勿依赖宿主默认值。
+2. 为 `maxTokens` 留足裕量：切勿按预期 JSON 或正文大小卡紧预算上限。
+3. 防御静默饥饿：将“解析结果为空”视为明确失败并触发重试，严禁仅因“未抛出异常”就盲目放行。

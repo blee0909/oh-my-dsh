@@ -31,3 +31,12 @@ Spawned commands get a scrubbed env (drop `*KEY*`/`*SECRET*`/`*TOKEN*`/`*PASSWOR
 ## Unlink link-shaped paths
 
 A path that may be a symlink or Windows junction is removed with `lstatSync().isSymbolicLink()` then `unlinkSync`: unlink deletes only the link and refuses a real directory, so it never follows the link into its target. Windows `rmSync(link)` throws `ERR_FS_EISDIR` on a junction; recursive deletion may descend through one into its target. Reserve recursive `rmSync` for known real directories.
+
+## Disable reasoning for structured auxiliary calls and guard against empty completions
+
+On reasoning (thinking) models, internal thinking tokens are drawn from the same `maxTokens` budget as the visible output. Auxiliary utility tasks (translation, entity extraction, categorization, question generation, compaction summarization, session titles) are rule-following structured tasks rather than multi-step deduction. If an auxiliary call does not explicitly disable reasoning, the model's internal thinking tokens can silently exhaust the entire `maxTokens` budget before any output text is emitted. Because the request finishes cleanly with a `stop` reason and throws no error, this failure manifests as a silent empty completion ("no output produced") rather than an exception.
+
+When authoring auxiliary LLM calls in plugins or core subsystems:
+1. Explicitly pass `reasoningEffort: 'off'` on the call envelope unless the task genuinely requires multi-step deductive reasoning.
+2. Leave ample token headroom: do not size `maxTokens` tightly to the expected output JSON.
+3. Guard against silent starvation: treat an empty parsed payload as a failure and retry, rather than treating zero thrown errors as a successful run.

@@ -91,6 +91,41 @@ export function apply(ctx: Context) {
 }
 ```
 
+## An auxiliary LLM call (structured output / utility task)
+
+When a plugin performs auxiliary utility tasks (such as entity extraction, translation, classification, or card generation) via `ctx.llm.stream()` or `ctx.llm.generate()`, explicitly disable reasoning by setting `reasoningEffort: 'off'`. On thinking models, reasoning tokens share the same `maxTokens` budget as the output; failing to disable reasoning causes thinking tokens to silently starve visible text without throwing an error. Always leave ample `maxTokens` headroom and treat empty parsed results as retryable failures.
+
+```ts
+import type { Context } from '@deepseek-ai/cordis'
+import type { GenerateOptions, LlmRuntime } from '@deepseek-ai/dsh-llm'
+
+export async function collectStructuredOutput(
+  llm: LlmRuntime,
+  options: Omit<GenerateOptions, 'reasoningEffort'> & { reasoningEffort?: GenerateOptions['reasoningEffort'] },
+  signal?: AbortSignal,
+): Promise<string> {
+  // Explicitly default to 'off' for rule-following auxiliary tasks
+  const opts: GenerateOptions = {
+    ...options,
+    reasoningEffort: options.reasoningEffort ?? 'off',
+    signal,
+  }
+
+  let text = ''
+  for await (const chunk of llm.stream(opts)) {
+    if (chunk.type === 'text-delta') {
+      text += chunk.text
+    }
+  }
+
+  // Defensive guard: treat silent token starvation (empty output) as a failure
+  if (!text.trim()) {
+    throw new Error('Model produced no visible output (possible token budget exhaustion).')
+  }
+  return text
+}
+```
+
 ## Runnable wirings
 
 Shipped applications contribute profile layers through `packages/bundle/*/cordis.patch.yml`, and the product `dsh` launcher owns Web, ACP, SDK, and one-shot headless execution through named profiles. Optional user-facing overlays live under `apps/cli/config/examples/`; profile integration tests live under `apps/cli/tests/profiles/`, while package-specific Loader compositions stay with their package tests.
