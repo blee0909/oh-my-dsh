@@ -5,10 +5,8 @@ import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { DeepSeekFileId } from './file-id.ts'
 import type { DeepSeekFileId as DeepSeekFileIdType } from './file-id.ts'
 import { deepSeekFetch } from '../transport.ts'
+import { messagesApiRoot, MESSAGES_FILES_BETA } from './messages-api.ts'
 import type { DeepSeekProtocol } from './types.ts'
-
-/** Required opt-in for Messages file operations and file-referenced image requests. */
-export const MESSAGES_FILES_BETA = 'files-api-2025-04-14'
 
 /** Minimum provider-supported file lifetime. */
 export const MIN_FILE_EXPIRY_SECONDS = 3_600
@@ -156,11 +154,13 @@ export class DeepSeekFilesClient {
    * @param options - endpoint, API-key snapshot, and optional test transport.
    */
   constructor(options: FilesApiOptions) {
-    this.baseURL = options.baseURL.replace(/\/+$/u, '')
     this.apiKey = options.apiKey
     this.fetchImpl = options.fetch ?? deepSeekFetch
     this.protocol = options.protocol
-    this.path = this.protocol === 'messages' ? '/v1/files' : '/files'
+    this.baseURL = this.protocol === 'messages'
+      ? messagesApiRoot(options.baseURL)
+      : options.baseURL.replace(/\/+$/u, '')
+    this.path = '/files'
   }
 
   private parseFile(value: unknown, operation: string): DeepSeekFileObject {

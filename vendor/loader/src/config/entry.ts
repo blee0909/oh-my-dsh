@@ -224,7 +224,7 @@ export class Entry {
     this._patchContext([])
     this.loader.showLog(this, 'apply')
     try {
-      this.fiber = this.ctx.registry.plugin(plugin, this.options.config, this.getOuterStack)
+      this.fiber = this.ctx.registry.plugin(plugin, this.options.config, this.getOuterStack).ctx.fiber
       await this.fiber?.await()
     } catch (error) {
       if (this.ctx.fiber.uid === null || (error as any)?.code === 'INACTIVE_EFFECT') return

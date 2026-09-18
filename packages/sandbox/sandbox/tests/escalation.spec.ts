@@ -81,12 +81,22 @@ describe('approveEscalation', () => {
     expect(seen[0]?.reason).toBe('escalate sandbox to workspace-write: the user asked to write in the workspace')
   })
 
-  it('a non-widening request fails closed with its own text and never asks', async () => {
+  it.each(ESCALATION_TARGETS)('repeating %s succeeds without asking for approval', async (mode) => {
+    const seen: unknown[] = []
+    const request = req({ requestedMode: mode, effectiveMode: mode })
+    await expect(approveEscalation(request, ingredients({ approver: approver('rejected', r => seen.push(r)) })))
+      .resolves.toBe(mode)
+    expect(seen).toEqual([])
+    await expect(approveEscalation(request, ingredients({ approver: undefined, agent: undefined })))
+      .resolves.toBe(mode)
+  })
+
+  it('a narrower or unsupported target fails closed without asking', async () => {
     const seen: unknown[] = []
     const spy = ingredients({ approver: approver('allowed-once', r => seen.push(r)) })
-    await expect(approveEscalation(req({ requestedMode: 'read-only' }), spy)).rejects.toThrow(
+    await expect(approveEscalation(req({ requestedMode: 'read-only', effectiveMode: 'workspace-write' }), spy)).rejects.toThrow(
       new RegExp(
-        'not strictly wider than this call\'s current "read-only" mode; '
+        'not strictly wider than this call\'s current "workspace-write" mode; '
         + 'nothing ran, so retry this command without sandbox_permissions and justification',
       ),
     )
@@ -99,6 +109,8 @@ describe('approveEscalation', () => {
         + 'nothing ran, so retry this operation without sandbox_permissions and justification',
       ),
     )
+    await expect(approveEscalation(req({ requestedMode: 'unknown-mode' }), spy))
+      .rejects.toThrow(/not strictly wider/)
     expect(seen).toEqual([])
   })
 

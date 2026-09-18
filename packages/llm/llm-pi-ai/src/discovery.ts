@@ -257,6 +257,7 @@ function catalogListing(installed: ReadonlyMap<string, Model<Api>>): LlmDiscover
     name: model.name,
     ...model.contextWindow === undefined ? {} : { contextWindow: model.contextWindow },
     ...model.maxTokens === undefined ? {} : { maxTokens: model.maxTokens },
+    inputModalities: [...model.input],
   }))
 }
 
@@ -286,6 +287,7 @@ function mergeDiscoveredModels(
         name: catalogEntry.name ?? model.name ?? catalogEntry.id,
         ...contextWindow === undefined ? {} : { contextWindow },
         ...maxTokens === undefined ? {} : { maxTokens },
+        inputModalities: [...catalogEntry.input],
       })
     } else {
       merged.push(model)
@@ -299,6 +301,7 @@ function mergeDiscoveredModels(
         name: catalogEntry.name ?? catalogEntry.id,
         ...catalogEntry.contextWindow === undefined ? {} : { contextWindow: catalogEntry.contextWindow },
         ...catalogEntry.maxTokens === undefined ? {} : { maxTokens: catalogEntry.maxTokens },
+        inputModalities: [...catalogEntry.input],
       })
     }
   }
