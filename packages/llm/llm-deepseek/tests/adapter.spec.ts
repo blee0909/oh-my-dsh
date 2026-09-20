@@ -1509,6 +1509,32 @@ describe('DeepSeekAdapter against a mock server', () => {
     expect(result.finish).toMatchObject({ kind: 'aborted', failure: { code: 'ABORTED' } })
   })
 
+  it('maps attachment errors to INVALID_REQUEST instead of retrying as TRANSPORT (#6818)', async () => {
+    const { AttachmentError } = await import('@deepseek-ai/dsh-attachment')
+    const mockStore = {
+      readImageRequest: vi.fn().mockRejectedValue(new AttachmentError('Attachment sha256:missing not found', 'ATTACHMENT_NOT_FOUND')),
+      accessResolver: () => ({ nativePath: '/path' }),
+    } as unknown as AttachmentStore
+    const adapter = adapterOf({
+      baseURL: 'http://127.0.0.1:1',
+      models: [{ id: 'deepseek-v4-flash', inputModalities: ['image'] }],
+    }, mockStore)
+    const iterate = async (): Promise<void> => {
+      for await (const _chunk of adapter.stream({
+        provider: 'deepseek-official',
+        model: 'deepseek-v4-flash',
+        messages: [createUserMessage({
+          source: { kind: 'user' },
+          content: [{ type: 'image', attachment: { attachmentId: AttachmentId('sha256:missing'), mediaType: 'image/png' } as unknown as ImageAttachmentRef }],
+        })],
+      })) { /* drain */ }
+    }
+    await expect(iterate()).rejects.toMatchObject({
+      code: 'INVALID_REQUEST',
+      message: expect.stringContaining('ATTACHMENT_NOT_FOUND'),
+    })
+  })
+
   it('throws EMPTY_RESPONSE when the response has no body', async () => {
     const adapter = adapterOf({ baseURL: 'http://127.0.0.1:1' })
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(

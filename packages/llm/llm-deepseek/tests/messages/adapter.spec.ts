@@ -13,9 +13,10 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import LlmRuntime, { createAssistantMessage, createSystemMessage } from '@deepseek-ai/dsh-llm'
+import LlmRuntime, { createAssistantMessage, createSystemMessage, createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { Message } from '@deepseek-ai/dsh-llm'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import LocalCredentials from '@deepseek-ai/dsh-credentials-local'
@@ -70,7 +71,7 @@ describe('direct Messages HTTP', () => {
   it('uses the Messages endpoint, authentication, attribution and final usage', async () => {
     const http = await endpoint()
     const llm = adapter({ baseURL: http.url })
-    const response = await assemble(llm.stream(options({ model: 'deepseek-flash', sessionId: SessionId('session-test'), purpose: 'compaction' })), 'deepseek-flash')
+    const response = await assemble(llm.stream(options({ model: 'deepseek-flash', sessionId: SessionId('session-test'), purpose: 'compaction', reasoningEffort: ReasoningEffortId('high') })), 'deepseek-flash')
     expect(response.message.content).toEqual([{ type: 'text', text: 'Hello 世界' }])
     expect(response.message.source).toMatchObject({
       model: 'deepseek-flash', replayState: { response: { model: 'deepseek-flash' } },
@@ -397,5 +398,38 @@ describe('Cordis provider composition', () => {
     expect((await assemble(ctx.llm.stream(options()))).assembler.finish).toMatchObject({ kind: 'error', failure: { code: 'INVALID_CREDENTIAL' } })
     await fiber.dispose()
     expect(ctx.llm.listProviders()).toEqual([])
+  })
+
+  it('maps attachment errors to INVALID_REQUEST instead of retrying as TRANSPORT (Discussions #6818)', async () => {
+    const { AttachmentError } = await import('@deepseek-ai/dsh-attachment')
+    const mockAttachments = {
+      readImageRequest: vi.fn().mockRejectedValue(new AttachmentError('Attachment sha256:abc not found in store', 'ATTACHMENT_NOT_FOUND')),
+      accessResolver: () => ({ nativePath: '/path' }),
+    }
+    const files = new DeepSeekFileStore()
+    const instance = new DeepSeekMessagesAdapter({
+      connection: () => Messages.resolveAdapterOptions({
+        models: [{ id: MODEL, systemPromptUpdate: 'in-history', inputModalities: ['image'] }],
+      }),
+      apiKey: () => Promise.resolve('test-key'),
+      userId: () => 'test-user',
+      attachments: () => mockAttachments as unknown as AttachmentStore,
+      imageAccess: () => undefined,
+      files: () => files,
+      prepareExtensions,
+    })
+    const stream = instance.stream(options({
+      messages: [createUserMessage({
+        source: { kind: 'user' },
+        content: [{ type: 'image', attachment: { attachmentId: AttachmentId('sha256:abc'), mediaType: 'image/png' } as unknown as ImageAttachmentRef }],
+      })],
+    }))
+
+    await expect(async () => {
+      for await (const _ of stream) {}
+    }).rejects.toMatchObject({
+      code: 'INVALID_REQUEST',
+      message: expect.stringContaining('ATTACHMENT_NOT_FOUND'),
+    })
   })
 })

@@ -313,8 +313,28 @@ describe('Messages images', () => {
     await expect(prepareImages([assistant([image])], connection, model, attachments, access, signal)).rejects.toMatchObject({ code: 'UNSUPPORTED_CONTENT' })
     expect(() => body([result('a', [image])])).toThrow(/image/)
     expect(() => body([assistant([image])])).toThrow(/assistant/)
-    expect(() => body([result('a', [{ type: 'reasoning', text: 'bad' }])])).toThrow(/user/)
+    expect(() => body([result('a', [{ type: 'audio' } as unknown as ContentBlock])])).toThrow(/user\/tool-result content audio/)
     expect(() => serialize(options({ model }), connection, [result('a', [image])], new Map([[ref.attachmentId, version]]), access, undefined, new Map()))
       .toThrow(/request file id is missing/)
+  })
+
+  it('tolerates historical reasoning blocks in user and tool-result messages without throwing (Discussions #6818)', () => {
+    const history = [
+      createMessage({
+        role: 'user',
+        source: { kind: 'user' },
+        content: [
+          { type: 'text', text: 'Subagent finished' },
+          { type: 'reasoning', text: 'internal chain of thought' } as unknown as ContentBlock,
+          { type: 'text', text: 'Final response' },
+        ],
+      }),
+    ]
+    const wire = body(history)
+    expect(wire.messages).toHaveLength(1)
+    expect(wire.messages[0]?.content).toEqual([
+      { type: 'text', text: 'Subagent finished' },
+      { type: 'text', text: 'Final response' },
+    ])
   })
 })

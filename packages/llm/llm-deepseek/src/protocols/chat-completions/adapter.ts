@@ -20,6 +20,7 @@ import type {
   ResolvedRetryPolicy,
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
+import { isAttachmentError } from '@deepseek-ai/dsh-attachment'
 import type {
   AttachmentId,
   AttachmentStore,
@@ -233,6 +234,13 @@ export class ChatCompletionsAdapter extends LlmAdapter {
         throw new LlmError('DeepSeek request aborted by caller', 'ABORTED', { cause: error })
       }
       if (error instanceof LlmError) throw error
+      if (isAttachmentError(error)) {
+        throw new LlmError(
+          `DeepSeek API attachment error (${error.code}): ${error.message}`,
+          'INVALID_REQUEST',
+          { cause: error },
+        )
+      }
       throw new LlmError(`DeepSeek API stream from ${connection.baseURL} failed`, 'TRANSPORT', { cause: error })
     } finally {
       consumer.abort('DeepSeek stream consumer stopped')
