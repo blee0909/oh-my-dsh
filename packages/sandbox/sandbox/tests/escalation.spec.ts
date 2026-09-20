@@ -131,4 +131,30 @@ describe('approveEscalation', () => {
   it('an outcome outside the closed union trips the exhaustiveness guard (defensive)', async () => {
     await expect(approveEscalation(req(), ingredients({ approver: approver('bogus' as never) }))).rejects.toThrow()
   })
+
+  it('reports deterministic policy rejection when the session policy is never (Discussions #7067)', async () => {
+    const approverWithPolicy = (policy: string) => ({
+      request: async () => 'rejected' as const,
+      effectivePolicy: () => policy,
+    })
+    await expect(approveEscalation(
+      req({ requestedMode: 'danger-full-access', effectiveMode: 'workspace-write', subject: 'command' }),
+      ingredients({ approver: approverWithPolicy('never') }),
+    )).rejects.toThrow(
+      'sandbox escalation to "danger-full-access" was rejected: approval prompts are disabled in this session (approval policy is \'never\') — '
+      + 'actions requiring approval are rejected automatically; do not retry with sandbox_permissions, surface this action to the user or delegating parent instead',
+    )
+
+    const sessionWithPolicy = {
+      seq: 2,
+      eventAt(seq: number) {
+        if (seq === 1) return { type: 'approval/policy', data: { policy: 'never' } }
+        return undefined
+      },
+    }
+    await expect(approveEscalation(
+      req({ requestedMode: 'danger-full-access', effectiveMode: 'workspace-write', subject: 'command' }),
+      ingredients({ approver: approver('rejected'), agent: { session: sessionWithPolicy } }),
+    )).rejects.toThrow(/approval policy is 'never'/)
+  })
 })

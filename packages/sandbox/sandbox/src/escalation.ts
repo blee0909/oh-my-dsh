@@ -106,6 +106,33 @@ export interface EscalationApprover<A = object, C = string> {
    * @returns the human's decision as a closed {@link EscalationOutcome}.
    */
   request(req: { agent: A; toolName: string; callId: C; reason: string; signal?: AbortSignal }): Promise<EscalationOutcome>
+  /** Query the effective approval policy for a session when available. */
+  effectivePolicy?(session: unknown): string
+}
+
+interface SessionEventHistory {
+  seq: number
+  eventAt(seq: unknown): { type: string; data?: { policy?: string } } | undefined
+}
+
+function isSessionWithHistory(session: unknown): session is SessionEventHistory {
+  return (
+    typeof session === 'object'
+    && session !== null
+    && 'seq' in session
+    && typeof (session as { seq: unknown }).seq === 'number'
+    && 'eventAt' in session
+    && typeof (session as { eventAt: unknown }).eventAt === 'function'
+  )
+}
+
+/** Read the last logged approval policy from a session's event history. */
+function readSessionPolicy(session: SessionEventHistory): string | undefined {
+  for (let seq = session.seq - 1; seq >= 0; seq -= 1) {
+    const event = session.eventAt(seq)
+    if (event?.type === 'approval/policy' && event.data?.policy) return event.data.policy
+  }
+  return undefined
 }
 
 /**
@@ -181,7 +208,19 @@ export async function approveEscalation<A, C>(request: EscalationRequest, approv
     // The schema enum already pinned `mode` to the closed target vocabulary;
     // the check above proved it is strictly wider.
     case 'allowed-once': return mode as SandboxMode
-    case 'rejected': throw new Error(`the user rejected escalating this ${subject} to "${mode}"`)
+    case 'rejected': {
+      const session = (approval.agent as { session?: unknown } | undefined)?.session
+      const policy = approval.approver.effectivePolicy?.(session)
+        ?? (isSessionWithHistory(session) ? readSessionPolicy(session) : undefined)
+      if (policy === 'never') {
+        throw new Error(
+          `sandbox escalation to "${mode}" was rejected: approval prompts are disabled in this session (approval policy is 'never') — `
+          + 'actions requiring approval are rejected automatically; do not retry with sandbox_permissions, '
+          + 'surface this action to the user or delegating parent instead',
+        )
+      }
+      throw new Error(`the user rejected escalating this ${subject} to "${mode}"`)
+    }
     case 'cancelled': throw new Error(`approval for escalating to "${mode}" was cancelled`)
     case 'unavailable': throw new Error(`sandbox escalation to "${mode}" requires approval, but no approval channel is available`)
     default: return assertNever(outcome, 'EscalationOutcome')

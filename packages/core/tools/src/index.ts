@@ -1931,9 +1931,18 @@ export class ToolRuntime extends Service {
     })
     switch (outcome) {
       case 'allowed-once': return { decision: { kind: 'allow' }, approvalCancelled: false }
-      case 'rejected': return {
-        decision: { kind: 'deny', reason: `the user rejected tool "${exec.name}"` },
-        approvalCancelled: false,
+      case 'rejected': {
+        const isNever = resolveApprovalPolicy(approval, exec.agent.session) === 'never'
+        return {
+          decision: {
+            kind: 'deny',
+            reason: isNever
+              ? `tool "${exec.name}" was rejected: approval prompts are disabled in this session (approval policy is 'never') — `
+                + 'actions requiring approval are rejected automatically'
+              : `the user rejected tool "${exec.name}"`,
+          },
+          approvalCancelled: false,
+        }
       }
       case 'cancelled': return {
         decision: { kind: 'deny', reason: `approval for tool "${exec.name}" was cancelled` },
@@ -2160,6 +2169,46 @@ function toolAbortedBeforeDispatchResult(prior?: ToolExecutionResult): ToolExecu
     },
     ...additionalContexts.length > 0 ? { additionalContexts } : {},
   }
+}
+
+interface ApproverWithPolicy {
+  effectivePolicy(session: unknown): string
+}
+
+function isApproverWithPolicy(approver: object): approver is ApproverWithPolicy {
+  return (
+    'effectivePolicy' in approver
+    && typeof (approver as { effectivePolicy: unknown }).effectivePolicy === 'function'
+  )
+}
+
+interface SessionEventHistory {
+  seq: number
+  eventAt(seq: unknown): { type: string; data?: { policy?: string } } | undefined
+}
+
+function isSessionWithHistory(session: unknown): session is SessionEventHistory {
+  return (
+    typeof session === 'object'
+    && session !== null
+    && 'seq' in session
+    && typeof (session as { seq: unknown }).seq === 'number'
+    && 'eventAt' in session
+    && typeof (session as { eventAt: unknown }).eventAt === 'function'
+  )
+}
+
+function resolveApprovalPolicy(approval: object, session: unknown): string | undefined {
+  if (isApproverWithPolicy(approval)) {
+    return approval.effectivePolicy(session)
+  }
+  if (isSessionWithHistory(session)) {
+    for (let seq = session.seq - 1; seq >= 0; seq -= 1) {
+      const event = session.eventAt(seq)
+      if (event?.type === 'approval/policy' && event.data?.policy) return event.data.policy
+    }
+  }
+  return undefined
 }
 
 export default ToolRuntime
