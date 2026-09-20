@@ -131,17 +131,18 @@ export class TeamRoster {
   list(membership: TeamMembership): TeamMemberView[] {
     const { root } = membership
     const state = this.journal.state(root)
+    const leadModel = this.leadModel(root)
     const result: TeamMemberView[] = [{
       id: root.id,
       name: 'lead',
       role: 'lead',
       status: root.status,
-      ...root.options.model === undefined ? {} : { model: root.options.model },
+      ...leadModel === undefined ? {} : { model: leadModel },
       diagnostics: [],
     }]
     for (const member of state.members) {
       const live = this.ctx.agents.get(member.id)
-      const model = live?.options.model ?? root.options.model
+      const model = this.memberModel(member.id)
       result.push({
         id: member.id,
         name: member.name,
@@ -435,9 +436,75 @@ export class TeamRoster {
     }
   }
 
+  /**
+   * Resolve the active model selection or execution route for the Lead.
+   * @param root - exact live Team Lead.
+   * @returns current model route, or undefined when unset.
+   */
+  private leadModel(root: Agent): string | undefined {
+    try {
+      const projections = this.ctx.sessionProjections
+      if (projections !== undefined) {
+        const selectionState = projections.stateOf(root.session, 'modelSelection' as never) as
+          | { pending?: { model?: string } | null; lastUsed?: { model?: string } | null }
+          | undefined
+        if (selectionState?.pending?.model) {
+          return selectionState.pending.model
+        }
+        if (selectionState?.lastUsed?.model) {
+          return selectionState.lastUsed.model
+        }
+      }
+    } catch {
+      // Fall through to live execution or default model
+    }
+
+    const requestModel = root.session.requestHeader()?.config.model
+    if (requestModel !== undefined) {
+      return requestModel
+    }
+
+    const defaultModelService = this.ctx.get('agentDefaultModel') as
+      | { currentSelection(): { model: string } }
+      | undefined
+    return root.options.model ?? defaultModelService?.currentSelection().model
+  }
+
+  /**
+   * Resolve the model associated with one teammate without borrowing from the Lead.
+   * @param memberId - exact teammate Session id.
+   * @returns the member's own live or durable model route, or undefined.
+   */
+  private memberModel(memberId: SessionId): string | undefined {
+    const live = this.ctx.agents.get(memberId)
+    if (live?.options.model !== undefined) {
+      return live.options.model
+    }
+
+    const session = this.ctx.sessions.get(memberId)
+    if (session !== undefined) {
+      const requestModel = session.requestHeader()?.config.model
+      if (requestModel !== undefined) {
+        return requestModel
+      }
+      try {
+        const events = session.snapshotEvents(session.inheritedEventCount)
+        const descriptor = foldSubagentDescriptor(events)
+        if (descriptor?.mode === 'continuable' && descriptor.agentModel !== undefined) {
+          return descriptor.agentModel
+        }
+      } catch {
+        // Fall through to undefined
+      }
+    }
+
+    return undefined
+  }
+
   /** Build one runtime member row after successful creation. */
   private memberView(member: TeamMemberSnapshot & { readonly phase: 'active' }): TeamMemberView {
     const live = this.ctx.agents.get(member.id)
+    const model = this.memberModel(member.id)
     return {
       id: member.id,
       name: member.name,
@@ -446,7 +513,7 @@ export class TeamRoster {
       description: member.description,
       provider: member.provider,
       context: member.context,
-      ...live?.options.model === undefined ? {} : { model: live.options.model },
+      ...model === undefined ? {} : { model },
       diagnostics: [],
     }
   }

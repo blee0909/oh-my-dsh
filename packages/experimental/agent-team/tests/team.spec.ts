@@ -228,6 +228,47 @@ describe('Team identity and provisioning', () => {
     await expect(spawn(ctx, lead, 'fresh-worker')).rejects.toMatchObject({ code: 'TEAM_MEMBER_NAME_TAKEN' })
   })
 
+  it('resolves dynamic Lead model and prevents offline teammates from borrowing Lead model (#7054)', async () => {
+    const { ctx, lead } = await setup([
+      textResponse('worker response'),
+    ])
+
+    // 1. Initial Lead model is 'mock'
+    expect(ctx.agentTeams.listMembers(lead)[0]?.model).toBe('mock')
+
+    // 2. Spawn a teammate and wait until it finishes and becomes inactive
+    const spawned = await spawn(ctx, lead, 'worker-offline')
+    await waitNoAgent(ctx, spawned.member.id)
+
+    // 3. Offline teammate must NOT borrow the Lead's model ('mock')
+    const rosterAfterOffline = ctx.agentTeams.listMembers(lead)
+    const teammateRow = rosterAfterOffline.find(r => r.name === 'worker-offline')
+    expect(teammateRow?.status).toBe('inactive')
+    expect(teammateRow?.model).toBeUndefined()
+
+    // 4. When the teammate session has its own executed model, it should be reflected
+    const childSession = ctx.sessions.get(spawned.member.id)
+    if (childSession !== undefined) {
+      vi.spyOn(childSession, 'requestHeader').mockReturnValue({
+        config: { provider: 'mock', model: 'codely-core' },
+      } as unknown as ReturnType<typeof childSession.requestHeader>)
+      const refreshedRoster = ctx.agentTeams.listMembers(lead)
+      const refreshedTeammate = refreshedRoster.find(r => r.name === 'worker-offline')
+      expect(refreshedTeammate?.model).toBe('codely-core')
+    }
+
+    // 5. Dynamic Lead model resolution reflects session modelSelection projection
+    const originalStateOf = ctx.sessionProjections.stateOf.bind(ctx.sessionProjections)
+    vi.spyOn(ctx.sessionProjections, 'stateOf').mockImplementation((session, key) => {
+      if (session.id === lead.id && key === ('modelSelection' as never)) {
+        return { pending: { provider: 'mock', model: 'upgraded-lead-model' }, lastUsed: null } as never
+      }
+      return originalStateOf(session, key)
+    })
+    const rosterWithDynamicLead = ctx.agentTeams.listMembers(lead)
+    expect(rosterWithDynamicLead[0]?.model).toBe('upgraded-lead-model')
+  })
+
   it('flushes the accepted child prompt before committing the active roster edge', async () => {
     const { ctx, lead } = await setup([textResponse('checkpointed child answer')])
     const flush = ctx.sessions.flush.bind(ctx.sessions)
