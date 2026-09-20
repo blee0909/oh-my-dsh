@@ -113,6 +113,7 @@ export function createElectronBuilderConfig(
       '**/*.so.*',
       '**/spawn-helper',
       '**/@vscode/ripgrep/bin/rg',
+      '**/@vscode/ripgrep*/bin/rg*',
     ],
     extraResources: [
       { from: buildPaths.runtime, to: 'runtime' },

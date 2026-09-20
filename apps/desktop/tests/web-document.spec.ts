@@ -61,3 +61,26 @@ it('refuses another page origin without forwarding its request', async () => {
   expect(response.status).toBe(403)
   expect(fetch).not.toHaveBeenCalled()
 })
+
+it('serves shell update dialog and mandatory update documents from the renderer directory', async () => {
+  const root = join(__dirname, '..', 'renderer')
+  const dialogResponse = await serveWebDocument(new Request('dsh-app://shell/update-dialog.html'), root)
+  expect(dialogResponse.status).toBe(200)
+  expect(dialogResponse.headers.get('content-type')).toContain('text/html')
+  expect(await dialogResponse.text()).toContain('update-dialog')
+
+  const mandatoryResponse = await serveWebDocument(new Request('dsh-app://shell/mandatory-update.html'), root)
+  expect(mandatoryResponse.status).toBe(200)
+  expect(mandatoryResponse.headers.get('content-type')).toContain('text/html')
+  expect(await mandatoryResponse.text()).toContain('mandatory-update')
+
+  const cssResponse = await serveWebDocument(new Request('dsh-app://shell/update-dialog.css'), root)
+  expect(cssResponse.status).toBe(200)
+  expect(cssResponse.headers.get('content-type')).toContain('text/css')
+
+  const missingResponse = await serveWebDocument(new Request('dsh-app://shell/nonexistent.html'), root)
+  expect(missingResponse.status).toBe(404)
+
+  const traversalResponse = await serveWebDocument(new Request('dsh-app://shell/%2e%2e%2fpackage.json'), root)
+  expect(traversalResponse.status).toBe(403)
+})
