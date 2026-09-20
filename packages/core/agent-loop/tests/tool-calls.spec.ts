@@ -778,3 +778,74 @@ describe('PTC mode native-tool denial through the agent loop', () => {
     })
   })
 })
+
+describe('Discussions #6967 & #7293 tool scheduler failure and session wedging defense', () => {
+  it('closes all started and pending calls on scheduler prepare failure so transcript remains valid', async () => {
+    const adapter = new MockAdapter([
+      multiCall([
+        { id: 'c1', name: 'p', args: { id: '1' } },
+        { id: 'c2', name: 'p', args: { id: '2' } },
+      ]),
+    ])
+    const ctx = await harness(adapter, 2)
+    const gated = gatedParallelTool('p')
+    ctx.tools.register(gated.tool)
+
+    const scheduler = ctx.tools[TOOL_RUNTIME_SCHEDULER]
+    scheduler.prepare = async () => {
+      throw new TypeError("Cannot read properties of undefined (reading 'prepare')")
+    }
+
+    const agent = await ctx.agentLoop.create(SessionId('scheduler-prepare-fail'), { provider: 'mock', model: 'mock' })
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'run tools' }], source: { kind: 'user' } }))
+    await waitForIdle(ctx, agent)
+
+    const evts = events(agent)
+    const calls = evts.filter(e => e.type === 'tool/call')
+    const results = evts.filter(e => e.type === 'tool/result')
+
+    // Both calls must have a corresponding tool/result
+    expect(calls).toHaveLength(2)
+    expect(results).toHaveLength(2)
+    expect(results.map(e => e.data.message.source.callId)).toEqual([ToolCallId('c1'), ToolCallId('c2')])
+    expect(results.every(e => e.data.message.content[0]?.type === 'tool-result' && e.data.message.content[0].isError)).toBe(true)
+
+    // deriveMessages must produce well-formed messages with all tools resolved
+    const derived = agent.session.deriveMessages()
+    expect(derived.length).toBeGreaterThan(0)
+    // Both tool calls have resolved tool results in derived messages
+    const toolResults = derived.flatMap(m => m.content).filter(b => b.type === 'tool-result')
+    expect(toolResults).toHaveLength(2)
+  })
+
+  it('throws descriptive diagnostic when TOOL_RUNTIME_SCHEDULER symbol key is missing', async () => {
+    const adapter = new MockAdapter([
+      multiCall([{ id: 'c1', name: 'p', args: { id: '1' } }]),
+    ])
+    const ctx = await harness(adapter, 1)
+    const gated = gatedParallelTool('p')
+    ctx.tools.register(gated.tool)
+
+    // Detach the scheduler symbol on ctx.tools to simulate module split
+    const origScheduler = ctx.tools[TOOL_RUNTIME_SCHEDULER]
+    Object.defineProperty(ctx.tools, TOOL_RUNTIME_SCHEDULER, { value: undefined, configurable: true, writable: true })
+
+    const agent = await ctx.agentLoop.create(SessionId('missing-scheduler-diag'), { provider: 'mock', model: 'mock' })
+    agent.followup(createUserMessage({ content: [{ type: 'text', text: 'run tools' }], source: { kind: 'user' } }))
+    await waitForIdle(ctx, agent)
+
+    const turnEnd = events(agent).findLast(e => e.type === 'turn/end')
+    const errorMessage = turnEnd?.type === 'turn/end' && turnEnd.data.reason.kind === 'error'
+      ? turnEnd.data.reason.error.message
+      : ''
+    expect(errorMessage).toContain('ToolRuntimeScheduler is not registered on ctx.tools under TOOL_RUNTIME_SCHEDULER')
+
+    // Even when scheduler is missing, the tool call was paired with a synthetic result
+    const evts = events(agent)
+    expect(evts.filter(e => e.type === 'tool/call')).toHaveLength(1)
+    expect(evts.filter(e => e.type === 'tool/result')).toHaveLength(1)
+
+    // Restore scheduler for cleanliness
+    Object.defineProperty(ctx.tools, TOOL_RUNTIME_SCHEDULER, { value: origScheduler, configurable: true, writable: true })
+  })
+})

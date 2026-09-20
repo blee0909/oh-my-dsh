@@ -14,7 +14,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { createToolResultMessage, type ToolCallBlock } from '@deepseek-ai/dsh-llm'
 import type { Session, SessionSeq, UserMessage } from '@deepseek-ai/dsh-session'
-import { TOOL_ABORTED_BEFORE_DISPATCH, TOOL_RUNTIME_SCHEDULER, type ToolExecutionInput, type ToolExecutionMode, type ToolExecutionResult, type ToolRunContext } from '@deepseek-ai/dsh-tools'
+import { TOOL_ABORTED_BEFORE_DISPATCH, TOOL_RUNTIME_SCHEDULER, type ToolExecutionInput, type ToolExecutionMode, type ToolExecutionResult, type ToolRunContext, type ToolRuntimeScheduler } from '@deepseek-ai/dsh-tools'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
 
 /** One tool call after argument parsing, ready to schedule. */
@@ -38,15 +38,31 @@ interface GroupOutcome {
   concluded: boolean
 }
 
+function requireScheduler(ctx: Context): ToolRuntimeScheduler {
+  const scheduler = (ctx.tools as Partial<Record<typeof TOOL_RUNTIME_SCHEDULER, ToolRuntimeScheduler>>)[TOOL_RUNTIME_SCHEDULER]
+  if (scheduler === undefined) {
+    throw new TypeError(
+      'ToolRuntimeScheduler is not registered on ctx.tools under TOOL_RUNTIME_SCHEDULER ' +
+      '(module instance mismatch or missing ToolRuntime service)',
+    )
+  }
+  return scheduler
+}
+
+function failureMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === 'string' && error) return error
+  return 'internal scheduler failure'
+}
+
 /**
  * Schedule one assistant step's tool calls by their live concurrency mode.
  * Ordinary completion and abort commit started-call results in order. Abort
  * drains them, records synthetic results for unstarted calls, and returns with
  * the signal still aborted after accepting started-call context through the
- * caller-supplied acceptor (the machine stages it in its next-step inbox for the
- * step boundary). An internal scheduler failure stops new dispatches, drains
- * already-started dispatches, and rejects with the first failure without
- * fabricating tool results.
+ * batch. Scheduler failure drains dispatches, records recovery results for
+ * uncompleted calls so session history remains serializable, and rethrows.
+ *
  * The committed step's AgentLoop driver boundary supplies the initiating Agent
  * that becomes each explicit {@link ToolExecutionInput.agent}.
  *
@@ -82,21 +98,29 @@ export async function executeToolCalls(
 
   let next = 0
   let concluded = false
-  while (next < planned.length) {
-    // Commit before classifying again so registry changes affect unstarted calls.
-    // oxlint-disable-next-line typescript/no-non-null-assertion -- bounded by the loop condition
-    const first = planned[next]!
-    const mode = ctx.tools.executionMode(first.exec).kind
-    const group = mode === 'parallel' ? planned.slice(next) : [first]
-    const outcome = await runGroup(
-      ctx, turn, step, group, mode, signal, acceptContext,
-    )
-    next += outcome.consumed
-    concluded ||= outcome.concluded
-    if (outcome.aborted) {
-      for (const call of planned.slice(next)) appendSkippedToolCall(session, turn, step, call.block)
-      return { concluded }
+  let currentGroup: PlannedCall[] = []
+  try {
+    while (next < planned.length) {
+      // Commit before classifying again so registry changes affect unstarted calls.
+      // oxlint-disable-next-line typescript/no-non-null-assertion -- bounded by the loop condition
+      const first = planned[next]!
+      const mode = ctx.tools.executionMode(first.exec).kind
+      currentGroup = mode === 'parallel' ? planned.slice(next) : [first]
+      const outcome = await runGroup(
+        ctx, turn, step, currentGroup, mode, signal, acceptContext,
+      )
+      next += outcome.consumed
+      currentGroup = []
+      concluded ||= outcome.concluded
+      if (outcome.aborted) {
+        for (const call of planned.slice(next)) appendSkippedToolCall(session, turn, step, call.block)
+        return { concluded }
+      }
     }
+  } catch (error: unknown) {
+    const remainingIndex = next + currentGroup.length
+    for (const call of planned.slice(remainingIndex)) appendSkippedToolCall(session, turn, step, call.block)
+    throw error
   }
   return { concluded }
 }
@@ -149,9 +173,10 @@ async function runGroup(
       const slot = slots[committed]
       if (slot === undefined) break
       const call = group[committed]
+      const scheduler = requireScheduler(ctx)
       const result = slot.needsPost
-        ? await ctx.tools[TOOL_RUNTIME_SCHEDULER].finalize(slot.exec, slot.result)
-        : ctx.tools[TOOL_RUNTIME_SCHEDULER].finish(slot.exec, slot.result)
+        ? await scheduler.finalize(slot.exec, slot.result)
+        : scheduler.finish(slot.exec, slot.result)
       // oxlint-disable-next-line typescript/no-non-null-assertion -- bounded index
       appendToolResult(session, turn, step, call!.block, result, callSeqs[committed]!)
       for (const context of result.additionalContexts ?? []) acceptContext(context)
@@ -167,11 +192,12 @@ async function runGroup(
     const call = group[index]!
     callSeqs[index] = appendToolCall(session, turn, step, call.block)
     started++
-    const prepared = await ctx.tools[TOOL_RUNTIME_SCHEDULER].prepare(call.exec)
+    const scheduler = requireScheduler(ctx)
+    const prepared = await scheduler.prepare(call.exec)
     throwSchedulerFailure()
     switch (prepared.kind) {
       case 'dispatch': {
-        const promise = ctx.tools[TOOL_RUNTIME_SCHEDULER].dispatch(prepared.exec).then(
+        const promise = scheduler.dispatch(prepared.exec).then(
           (outcome) => {
             slots[index] = { exec: prepared.exec, result: outcome.result, needsPost: outcome.kind === 'post-result' }
             return index
@@ -232,6 +258,27 @@ async function runGroup(
   } catch (error: unknown) {
     schedulerFailure ??= { error }
     await Promise.allSettled(inFlight.values())
+    const errText = failureMessage(schedulerFailure.error)
+    while (committed < started) {
+      // oxlint-disable-next-line typescript/no-non-null-assertion -- bounded by started
+      const call = group[committed]!
+      // oxlint-disable-next-line typescript/no-non-null-assertion -- bounded by started
+      const callSeq = callSeqs[committed]!
+      const slot = slots[committed]
+      const result: ToolExecutionResult = slot?.result ?? {
+        content: [{ type: 'text', text: `Error: tool execution failed (${errText})` }],
+        isError: true,
+        error: {
+          message: errText,
+          info: { name: 'ToolSchedulerError', code: 'SCHEDULER_FAILURE' },
+        },
+      }
+      appendToolResult(session, turn, step, call.block, result, callSeq)
+      committed++
+    }
+    for (const call of group.slice(started)) {
+      appendSkippedToolCall(session, turn, step, call.block)
+    }
     throw schedulerFailure.error
   }
 
