@@ -77,24 +77,29 @@ export function createWorkspaceViewStore(): EngineStoreHandle<WorkspaceViewState
         d.sessionOrderByAccount = mode === 'manual' ? copySessionOrders(initialOrders) : {}
         d.orderBy = mode
       },
-      setGroupExpanded: (d, key: string, expanded: boolean) => { d.groupExpansion[key] = expanded },
+      setGroupExpanded: (d, key: string, expanded: boolean) => {
+        d.groupExpansion ??= {}
+        d.groupExpansion[key] = expanded
+      },
       retainAccountKeys: (d, workspaceKeys: readonly string[]) => {
         const retained = new Set(workspaceKeys)
         d.groupExpansion = Object.fromEntries(
-          Object.entries(d.groupExpansion).filter(([key]) => retained.has(key)),
+          Object.entries(d.groupExpansion ?? {}).filter(([key]) => retained.has(key)),
         )
         d.sessionOrderByAccount = Object.fromEntries(
-          Object.entries(d.sessionOrderByAccount).filter(([key]) => retained.has(key)),
+          Object.entries(d.sessionOrderByAccount ?? {}).filter(([key]) => retained.has(key)),
         )
         delete (d as WorkspaceViewState & { sessionUpdatedAtByAccount?: unknown }).sessionUpdatedAtByAccount
       },
       syncSessionOrders: (d, orders) => {
         if (d.orderBy !== 'manual') return
+        d.sessionOrderByAccount ??= {}
         Object.assign(d.sessionOrderByAccount, copySessionOrders(orders))
       },
       setSessionOrder: (d, accountKey, order, initialOrders) => {
         if (d.orderBy === 'updated') d.sessionOrderByAccount = copySessionOrders(initialOrders)
         d.orderBy = 'manual'
+        d.sessionOrderByAccount ??= {}
         d.sessionOrderByAccount[accountKey] = [...order]
       },
     },

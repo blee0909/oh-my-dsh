@@ -579,6 +579,23 @@ describe('createWorkspaceViewStore', () => {
     expect(snapshot.groupExpansion).toEqual({ '': true, alpha: true })
     expect(snapshot.sessionOrderByAccount).toEqual({ alpha: ['alpha-session'] })
   })
+
+  it('safely handles retainAccountKeys with corrupted or incomplete view snapshots (Discussions #6942)', () => {
+    const store = createWorkspaceViewStore().create()
+    // Simulate draft having undefined or null groupExpansion / sessionOrderByAccount
+    store.store.update((draft) => {
+      delete (draft as unknown as Record<string, unknown>).groupExpansion
+      delete (draft as unknown as Record<string, unknown>).sessionOrderByAccount
+    })
+
+    expect(() => {
+      store.actions.retainAccountKeys(['', 'alpha'])
+    }).not.toThrow()
+
+    const snapshot = store.getSnapshot()
+    expect(snapshot.groupExpansion).toEqual({})
+    expect(snapshot.sessionOrderByAccount).toEqual({})
+  })
 })
 
 describe('workspaceLabel', () => {

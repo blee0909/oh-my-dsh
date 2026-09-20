@@ -151,7 +151,15 @@ function attachPersistence<T>(api: StoreApi<T>, name: string): void {
   try {
     const raw = localStorage.getItem(name)
     if (raw !== null) {
-      api.setState(devFreeze(JSON.parse(raw) as T), true)
+      const parsed: unknown = JSON.parse(raw)
+      const current = api.getState()
+      const merged = (
+        typeof current === 'object' && current !== null && !Array.isArray(current) &&
+        typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+      )
+        ? { ...(current as Record<string, unknown>), ...(parsed as Record<string, unknown>) } as T
+        : (parsed as T)
+      api.setState(devFreeze(merged), true)
     }
   } catch (error) {
     console.error(`snapshot store '${name}' rehydration failed:`, error)

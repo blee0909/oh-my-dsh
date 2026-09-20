@@ -282,6 +282,28 @@ describe('defineStore', () => {
     }).create()
     expect(() => { inst.clearPersisted() }).not.toThrow()
   })
+
+  it('preserves initial default object properties when rehydrating a partial snapshot (Discussions #6942)', () => {
+    const backing = new Map<string, string>()
+    backing.set('spec.partial', JSON.stringify({ existing: 'loaded' }))
+    vi.stubGlobal('localStorage', {
+      getItem: (key: string) => backing.get(key) ?? null,
+      setItem: (key: string, value: string) => { backing.set(key, value) },
+      removeItem: (key: string) => { backing.delete(key) },
+    })
+
+    const handle = defineStore({
+      init: () => ({ existing: 'default', missingField: 'retained', nestedList: [] as string[] }),
+      persist: 'spec.partial',
+      actions: { setExisting: (d, v: string) => { d.existing = v } },
+    })
+
+    const inst = handle.create()
+    const snapshot = inst.getSnapshot()
+    expect(snapshot.existing).toBe('loaded')
+    expect(snapshot.missingField).toBe('retained')
+    expect(snapshot.nestedList).toEqual([])
+  })
 })
 
 describe('shallowEqual', () => {
