@@ -34,16 +34,23 @@ export const name = 'session-log-deepseek'
 /** Services required to resolve sessions and contribute the provider request field. */
 export const inject = ['deepseekLlmApiExtensions', 'sessions']
 
+/** Default maximum serialized JSON bytes per contributed session-log batch (4 MiB). */
+export const DEFAULT_MAX_BATCH_BYTES = 4 * 1024 * 1024
+
 /** Session-log request contribution configuration. */
 export interface Config {
   /** Contribute `dsh_session_log` to official DeepSeek requests. Defaults to `true`. */
   enabled?: boolean
+  /** Maximum serialized JSON byte size of contributed session log events per request. Defaults to 4 MiB. */
+  maxBatchBytes?: number
 }
 
 /** Validated Session-log request contribution configuration. */
 export const Config: z<Config> = z.object({
   enabled: z.boolean().default(true),
+  maxBatchBytes: z.natural().min(1).default(DEFAULT_MAX_BATCH_BYTES),
 })
+
 
 interface AcceptanceFold {
   readonly scannedEvents: SessionLogOffsetType
@@ -151,12 +158,37 @@ export function acceptedThrough(session: Session): SessionSeqCursor {
 }
 
 /**
+ * Select an oldest-first prefix of wire events whose serialized JSON UTF-8 byte
+ * size does not exceed `maxBytes`. The first event is always admitted to prevent watermark stalls.
+ * @param events - chronological wire event candidates.
+ * @param maxBytes - maximum cumulative JSON bytes allowed in the batch.
+ * @returns prefix of events within the byte budget.
+ */
+export function takeBatch(
+  events: readonly DeepSeekSessionLogWireEvent[],
+  maxBytes: number,
+): DeepSeekSessionLogWireEvent[] {
+  const batch: DeepSeekSessionLogWireEvent[] = []
+  let bytes = 0
+  for (const event of events) {
+    const size = Buffer.byteLength(JSON.stringify(event), 'utf8')
+    if (batch.length > 0 && bytes + size > maxBytes) {
+      break
+    }
+    batch.push(event)
+    bytes += size
+  }
+  return batch
+}
+
+/**
  * Register the incremental `dsh_session_log` request contribution when enabled.
  * @param ctx - plugin context carrying Sessions and the DeepSeek request-extension registry.
  * @param config - validated configuration.
  */
 export function apply(ctx: Context, config: Config): void {
   if (config.enabled !== true) return
+  const maxBatchBytes = config.maxBatchBytes ?? DEFAULT_MAX_BATCH_BYTES
   ctx.deepseekLlmApiExtensions.register('dsh_session_log', {
     prepare: (request) => {
       // TODO: Define an explicit wire result for direct or stale-session calls if they become a supported product path.
@@ -167,17 +199,19 @@ export function apply(ctx: Context, config: Config): void {
       const afterSeq = acceptedThrough(session)
       // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
       const snapshot = session.snapshotEvents()
-      const throughSeq = snapshot.at(-1)?.seq
-      if (throughSeq === undefined) return undefined
+      const tailSeq = snapshot.at(-1)?.seq
+      if (tailSeq === undefined) return undefined
       // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
       const suffix = session.snapshotEvents(SessionLogOffset(afterSeq + 1))
+      const events = takeBatch(suffix.map(wireEvent), maxBatchBytes)
+      const throughSeq = events.at(-1)?.seq ?? Number(tailSeq)
       const value: DeepSeekSessionLogExtension = {
         version: 1,
         sessionFormatVersion: session.header.version,
         session: wireHeader(session),
         afterSeq: Number(afterSeq),
-        throughSeq: Number(throughSeq),
-        events: suffix.map(wireEvent),
+        throughSeq,
+        events,
       }
       return {
         value,
@@ -185,7 +219,7 @@ export function apply(ctx: Context, config: Config): void {
           session.append('session-log-deepseek/delivery-accepted', {
             sessionId: session.id,
             sessionFormatVersion: session.header.version,
-            throughSeq,
+            throughSeq: SessionSeq(throughSeq),
           })
           // TODO: Add an immediate lightweight checkpoint if duplicate replay after a 2xx crash window becomes unacceptable.
         },

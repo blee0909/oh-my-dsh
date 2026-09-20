@@ -28,13 +28,14 @@ Incremental canonical session-log upload for official DeepSeek LLM API requests.
 | Key | Default | Meaning |
 |---|---:|---|
 | `enabled` | `true` | Register the `dsh_session_log` contribution. Set it to `false` to stop Session-log upload. |
+| `maxBatchBytes` | `4194304` | Maximum serialized JSON UTF-8 byte size of contributed session log events per request. Suffixes exceeding the cap drain across successive requests. |
 
 Shipped profiles mount the plugin, so the default configuration registers the request field and appends the acceptance watermark; an overlay opts out with `enabled: false`.
 
 <a id="request-field"></a>
 ## Request field
 
-For a request carrying a live `sessionId`, the plugin folds the greatest accepted watermark for that exact Session format generation, snapshots `Session.events`, and sends the contiguous suffix after the watermark. A process-local fold scans each event once and consumes later appends incrementally; restart and HMR rebuild it from the durable log. The version-1 field contains `sessionFormatVersion`, a raw session header (`seedLength` is present only for a seeded Session), numeric `afterSeq` and `throughSeq`, and every complete canonical event translated to raw-number envelope fields. Forked sessions ignore inherited parent watermarks because both the recorded Session id and format generation must match the request source. Surface events require `surfaceOp`, with numeric `startSeq` and `endSeq` for replacements; only system, user, and tool events may carry `sourceEventSeqs`. Assistant provider metadata stays in the embedded stream, and log-only events carry neither metadata field.
+For a request carrying a live `sessionId`, the plugin folds the greatest accepted watermark for that exact Session format generation, snapshots `Session.events`, and sends the contiguous suffix after the watermark, bounded to an oldest-first batch within `maxBatchBytes` (defaulting to 4 MiB) whose last event sequence is named by `throughSeq`. If an individual event exceeds the limit, it is still admitted as the first event of the batch to ensure forward progress without stalling watermarks. A process-local fold scans each event once and consumes later appends incrementally; restart and HMR rebuild it from the durable log. The version-1 field contains `sessionFormatVersion`, a raw session header (`seedLength` is present only for a seeded Session), numeric `afterSeq` and `throughSeq`, and every complete canonical event translated to raw-number envelope fields. Forked sessions ignore inherited parent watermarks because both the recorded Session id and format generation must match the request source. Surface events require `surfaceOp`, with numeric `startSeq` and `endSeq` for replacements; only system, user, and tool events may carry `sourceEventSeqs`. Assistant provider metadata stays in the embedded stream, and log-only events carry neither metadata field.
 
 <a id="acceptance-and-retry"></a>
 ## Acceptance and retry
@@ -68,7 +69,7 @@ None; the model-visible request prefix remains unchanged.
 
 - **Crash-window duplicates** — a 2xx followed by process loss before the acceptance watermark persists causes conservative replay on resume.
 - **No live Session means no field** — direct or stale-session calls have no canonical log to snapshot; explicit absence semantics remain deferred.
-- **No independent request-size cap** — complete delivery is fail-closed; provider rejection leaves the cursor unchanged instead of truncating the log.
+
 
 <a id="dev-note"></a>
 ### Dev Note

@@ -28,4 +28,13 @@ describe('session-log upload configuration', () => {
       vi.resetModules()
     }
   })
+
+  it('defaults maxBatchBytes to DEFAULT_MAX_BATCH_BYTES and honors explicit overrides', async () => {
+    const { Config, DEFAULT_MAX_BATCH_BYTES } = await import('../src/index.ts')
+    expect(DEFAULT_MAX_BATCH_BYTES).toBe(4 * 1024 * 1024)
+    expect(Config({}).maxBatchBytes).toBe(DEFAULT_MAX_BATCH_BYTES)
+    expect(Config({ maxBatchBytes: 1024 * 1024 }).maxBatchBytes).toBe(1024 * 1024)
+    expect(() => Config({ maxBatchBytes: 0 })).toThrow()
+    expect(() => Config({ maxBatchBytes: -1 })).toThrow()
+  })
 })

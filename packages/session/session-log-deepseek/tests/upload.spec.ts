@@ -26,6 +26,7 @@ async function harness(
   id: string,
   seed?: readonly SessionEvent[],
   creation?: Omit<CreateSessionOptions, 'seed'>,
+  config?: SessionLogDeepSeek.Config,
 ): Promise<{
   ctx: Context
   session: Session
@@ -35,7 +36,7 @@ async function harness(
   contexts.push(ctx)
   await ctx.plugin(SessionStore)
   await ctx.plugin(DeepSeekLlmApiExtensionRegistry)
-  const upload = ctx.plugin(SessionLogDeepSeek, { enabled: true })
+  const upload = ctx.plugin(SessionLogDeepSeek, { enabled: true, ...config })
   await upload
   const options = seed === undefined
     ? undefined
@@ -43,6 +44,7 @@ async function harness(
   const session = ctx.sessions.create(SessionId(id), options)
   return { ctx, session, disposeUpload: () => upload.dispose() }
 }
+
 
 function body(text = 'x'.repeat(300)) {
   return { messages: [{ role: 'user', content: text }] }
@@ -529,5 +531,102 @@ describe('incremental DeepSeek session-log upload', () => {
     await disposeUpload()
     expect((await ctx.deepseekLlmApiExtensions.prepare({ body: body(), signal: SIGNAL, sessionId: session.id })).fields)
       .not.toHaveProperty('dsh_session_log')
+  })
+
+  it('bounds takeBatch output to maxBytes while unconditionally admitting the first event', () => {
+    const createEvent = (seq: number, length: number): DeepSeekSessionLogWireEvent => ({
+      type: 'user/message',
+      seq,
+      time: seq,
+      data: { text: 'x'.repeat(length) } as JsonValue,
+      surfaceOp: 'append',
+    })
+
+    const events = [
+      createEvent(0, 200),
+      createEvent(1, 200),
+      createEvent(2, 200),
+    ]
+
+    // Empty list
+    expect(SessionLogDeepSeek.takeBatch([], 1000)).toEqual([])
+
+    // Exact fit or threshold check
+    const size0 = Buffer.byteLength(JSON.stringify(events[0]), 'utf8')
+    const size1 = Buffer.byteLength(JSON.stringify(events[1]), 'utf8')
+    const batchTwo = SessionLogDeepSeek.takeBatch(events, size0 + size1)
+    expect(batchTwo).toHaveLength(2)
+    expect(batchTwo.map(e => e.seq)).toEqual([0, 1])
+
+    // Single event larger than maxBytes is still admitted
+    const oversized = [createEvent(0, 1000), createEvent(1, 100)]
+    const batchOversized = SessionLogDeepSeek.takeBatch(oversized, 100)
+    expect(batchOversized).toHaveLength(1)
+    expect(batchOversized[0]?.seq).toBe(0)
+  })
+
+  it('drains large pending suffixes across successive bounded batches without gaps or duplicates', async () => {
+    // Each event is ~300 bytes of data; set maxBatchBytes to ~700 bytes to ensure ~2 events per batch
+    const { ctx, session } = await harness('bounded-drain', undefined, undefined, { maxBatchBytes: 700 })
+
+    for (let i = 0; i < 6; i++) {
+      session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: `Event payload ${i} - ${'y'.repeat(150)}` }],
+        source: { kind: 'user' },
+      }), { surfaceOp: 'append' })
+    }
+
+    const uploadedSeqs: number[] = []
+    let turns = 0
+
+    while (turns < 10) {
+      turns++
+      const prepared = await ctx.deepseekLlmApiExtensions.prepare({
+        body: body(), signal: SIGNAL, sessionId: session.id,
+      })
+      const ext = prepared.fields.dsh_session_log
+      if (!ext || ext.events.length === 0) break
+
+      const batchBytes = Buffer.byteLength(JSON.stringify(ext.events), 'utf8')
+      // If there are multiple events in this batch, total must be within ceiling
+      if (ext.events.length > 1) {
+        expect(batchBytes).toBeLessThanOrEqual(700)
+      }
+      expect(ext.throughSeq).toBe(ext.events.at(-1)?.seq)
+
+      for (const e of ext.events) {
+        if (e.type === 'user/message') {
+          uploadedSeqs.push(e.seq)
+        }
+      }
+
+      await prepared.accept()
+    }
+
+    // All 6 user message events (seqs 0 through 5) were delivered in order with 0 duplicates
+    expect(uploadedSeqs).toEqual([0, 1, 2, 3, 4, 5])
+    expect(turns).toBeGreaterThan(1) // Confirms multiple batches were used
+  })
+
+  it('admits a single oversized event exceeding maxBatchBytes and advances the watermark', async () => {
+    // Set maxBatchBytes to 200 bytes, but append an event > 1000 bytes
+    const { ctx, session } = await harness('oversized-single', undefined, undefined, { maxBatchBytes: 200 })
+
+    session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'z'.repeat(1000) }],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+
+    const prepared = await ctx.deepseekLlmApiExtensions.prepare({
+      body: body(), signal: SIGNAL, sessionId: session.id,
+    })
+    const ext = prepared.fields.dsh_session_log
+    expect(ext).toBeDefined()
+    expect(ext?.events).toHaveLength(1)
+    expect(ext?.throughSeq).toBe(0)
+    expect(Buffer.byteLength(JSON.stringify(ext?.events), 'utf8')).toBeGreaterThan(200)
+
+    await prepared.accept()
+    expect(SessionLogDeepSeek.acceptedThrough(session)).toBe(0)
   })
 })
