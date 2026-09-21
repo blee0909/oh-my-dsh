@@ -261,7 +261,7 @@ export class SessionCommandController {
     const childId = brandString<SessionId>(`session-${randomUUID()}`)
     const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
     try {
-      const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
+      const selected = this.ctx.agentDefaultModel.currentSelection()
       await this.ctx.agents.create({
         sessionId: childId,
         seed: source.events.slice(0, cut),
@@ -277,7 +277,11 @@ export class SessionCommandController {
             ? {}
             : { workspaceMode: request.workspaceMode }),
         },
-        agentOptions: { provider, model },
+        agentOptions: {
+          provider: selected.provider,
+          model: selected.model,
+          ...selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort },
+        },
         setup: composition.setup,
       })
     } catch (error) {

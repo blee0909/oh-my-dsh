@@ -40,7 +40,7 @@ async function composed(workspaces: readonly Workspace[] = []): Promise<Context>
       })
       const agent = {} as Agent
       const agentCtx = ownerCtx
-      Object.assign(agent, { id: session.id, session, status: 'idle', ctx: agentCtx })
+      Object.assign(agent, { id: session.id, session, options: options.agentOptions, status: 'idle', ctx: agentCtx })
       await options.setup?.(agentCtx, agent)
       await ctx.agents.register(agent)
       return { agent, dispose: () => Promise.resolve() }
@@ -384,6 +384,29 @@ describe('sessions.fork', () => {
     expect(childEventTypes).toEqual([
       'turn/start', 'user/message', 'turn/end', 'session/end-seed',
     ])
+    await ctx.fiber.dispose()
+  })
+
+  it('preserves reasoningEffort in agentOptions when forking (#7248)', async () => {
+    const ctx = await composed()
+    const source = await liveAgent(ctx, 'session-fork-effort', 1)
+    const testRemote = createSessionTestRemote(ctx, {
+      defaultModelSelection: () => ({
+        provider: 'default-provider',
+        model: 'default-model',
+        reasoningEffort: ReasoningEffortId('high'),
+      }),
+      cwd: '/tmp',
+    })
+    const response = await testRemote.fork(request({ sessionId: source.id, atSeq: 1 }))
+    expect(response.ok).toBe(true)
+    if (!response.ok) return
+    const child = ctx.agents.get(response.value.sessionId)
+    expect(child?.options).toEqual({
+      provider: 'default-provider',
+      model: 'default-model',
+      reasoningEffort: 'high',
+    })
     await ctx.fiber.dispose()
   })
 })

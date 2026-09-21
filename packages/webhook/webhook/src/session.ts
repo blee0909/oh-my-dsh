@@ -7,7 +7,13 @@ import { brandString } from '@deepseek-ai/dsh-brand'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import type {} from '@deepseek-ai/dsh-agent-presets'
-import { boundContextSummary, createUserMessage, errorChain, type LlmCallConfig } from '@deepseek-ai/dsh-llm'
+import {
+  boundContextSummary,
+  createUserMessage,
+  errorChain,
+  type LlmCallConfig,
+  type ReasoningEffortId,
+} from '@deepseek-ai/dsh-llm'
 import type {} from '@deepseek-ai/dsh-permission-presets'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-session-title'
@@ -26,6 +32,7 @@ interface ResolvedWebhookSessionRequest {
   readonly agentOptions: {
     readonly provider: string
     readonly model: string
+    readonly reasoningEffort?: ReasoningEffortId
     readonly maxTokens?: number
   }
 }
@@ -62,7 +69,11 @@ function resolveRequest(ctx: Context, input: WebhookSessionRequest): ResolvedWeb
   let modelSelection: ModelSelection
   if (model === undefined) {
     const selected = ctx.agentDefaultModel.currentSelection()
-    agentOptions = { provider: selected.provider, model: selected.model }
+    agentOptions = {
+      provider: selected.provider,
+      model: selected.model,
+      ...selected.reasoningEffort === undefined ? {} : { reasoningEffort: selected.reasoningEffort },
+    }
     modelSelection = { ...selected }
   } else {
     const modelRecord = model as Record<string, unknown>
@@ -73,12 +84,21 @@ function resolveRequest(ctx: Context, input: WebhookSessionRequest): ResolvedWeb
       && (typeof maxTokens !== 'number' || !Number.isSafeInteger(maxTokens) || maxTokens <= 0)) {
       throw new TypeError('webhook Session request model.maxTokens must be a positive safe integer')
     }
+    const reasoningEffort = modelRecord['reasoningEffort']
+    if (reasoningEffort !== undefined && typeof reasoningEffort !== 'string') {
+      throw new TypeError('webhook Session request model.reasoningEffort must be a string')
+    }
     agentOptions = {
       provider,
       model: modelId,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort: reasoningEffort as ReasoningEffortId }),
       ...(maxTokens === undefined ? {} : { maxTokens }),
     }
-    modelSelection = { provider, model: modelId }
+    modelSelection = {
+      provider,
+      model: modelId,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort: reasoningEffort as ReasoningEffortId }),
+    }
   }
   return { workspacePath, title, prompt, agentPreset, permissionPreset, modelSelection, agentOptions }
 }

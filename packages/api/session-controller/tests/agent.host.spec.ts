@@ -10,6 +10,7 @@ import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { SessionAlreadyOwnedError } from '@deepseek-ai/dsh-session-persistence'
 import type { SessionObservation } from '@deepseek-ai/dsh-session-query'
 import TypertRegistry from '@deepseek-ai/dsh-typert-registry'
+import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ApiSessionAgentController,
@@ -483,5 +484,54 @@ describe('ApiSession create or adoption', () => {
     writeFileSync(file, 'not a directory')
     await expect(agents.ensureSession(SessionId('mkdir-failure'), join(file, 'child'), false))
       .rejects.toThrow('failed to ensure project directory')
+  })
+
+  it('preserves reasoningEffort in agentOptions when creating and resuming a session (#7248)', async () => {
+    const { ctx, agents } = await harness()
+    vi.spyOn(ctx.agentDefaultModel, 'currentSelection').mockReturnValue({
+      provider: 'deepseek',
+      model: 'deepseek-chat',
+      reasoningEffort: ReasoningEffortId('high'),
+    })
+
+    const cwd = mkdtempSync(join(tmpdir(), 'dsh-session-controller-effort-'))
+    tempDirs.push(cwd)
+    const newSessionId = SessionId('new-session-effort')
+    const agentStub = unpublishedAgent(ctx, header(newSessionId, cwd))
+    const createSpy = vi.spyOn(ctx.agents, 'create').mockResolvedValue({
+      agent: agentStub,
+      dispose: () => Promise.resolve(),
+    })
+
+    await agents.ensureSession(newSessionId, cwd, false)
+    expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: newSessionId,
+      agentOptions: {
+        provider: 'deepseek',
+        model: 'deepseek-chat',
+        reasoningEffort: 'high',
+      },
+    }))
+
+    const resumedMeta = header('resumed-session-effort', cwd)
+    providePersistence(ctx, {
+      list: () => Promise.resolve([resumedMeta]),
+      inspect: () => Promise.resolve({ meta: resumedMeta, events: [] }),
+    })
+    const resumeAgentStub = unpublishedAgent(ctx, resumedMeta)
+    const resumeSpy = vi.spyOn(ctx.agents, 'resume').mockResolvedValue({
+      agent: resumeAgentStub,
+      dispose: () => Promise.resolve(),
+    })
+
+    await agents.ensureSession(resumedMeta.id, cwd, true)
+    expect(resumeSpy).toHaveBeenCalledWith(expect.objectContaining({
+      resumeSessionId: resumedMeta.id,
+      agentOptions: {
+        provider: 'deepseek',
+        model: 'deepseek-chat',
+        reasoningEffort: 'high',
+      },
+    }))
   })
 })

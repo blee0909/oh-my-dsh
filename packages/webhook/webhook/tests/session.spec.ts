@@ -26,6 +26,7 @@ interface SessionHarness {
   markRequestHeader(): void
   readonly controller: AbortController
   readonly request: WebhookSessionRequest
+  createdAgentOptions?: unknown
 }
 
 const active: SessionHarness[] = []
@@ -73,6 +74,7 @@ function harness(options: HarnessOptions = {}): SessionHarness {
       if (options.failDetach) throw new Error('detach failed')
     },
   }
+  let createdAgentOptions: unknown
   const fake = {
     logger: { warn: vi.fn() },
     permissionPresets: {
@@ -117,8 +119,12 @@ function harness(options: HarnessOptions = {}): SessionHarness {
       },
     },
     agents: {
-      async create(createOptions: { setup?: (ctx: unknown, agent: unknown) => Promise<void> }) {
+      async create(createOptions: {
+        agentOptions?: unknown
+        setup?: (ctx: unknown, agent: unknown) => Promise<void>
+      }) {
         calls.push('agent-create')
+        createdAgentOptions = createOptions.agentOptions
         if (options.failAt === 'agent') throw new Error('agent failed')
         await createOptions.setup?.({
           on(event: string, listener: unknown) {
@@ -153,6 +159,7 @@ function harness(options: HarnessOptions = {}): SessionHarness {
       agentPreset: 'standard',
       permissionPreset: 'read-only',
     },
+    get createdAgentOptions() { return createdAgentOptions },
   }
   active.push(result)
   return result
@@ -217,15 +224,30 @@ describe('webhook Session creation', () => {
         kind: 'webhook', provider: 'github', source: 'primary', deliveryId: 'delivery', ruleId: 'review',
       },
     })
+    expect(test.createdAgentOptions).toEqual({
+      provider: 'default-provider',
+      model: 'default-model',
+      reasoningEffort: 'high',
+    })
   })
 
   it('uses a complete explicit model without consulting the default', async () => {
     const test = harness()
-    await create(test, { ...test.request, model: { provider: 'p', model: 'm', maxTokens: 10 } })
+    await create(test, {
+      ...test.request,
+      model: { provider: 'p', model: 'm', maxTokens: 10, reasoningEffort: ReasoningEffortId('low') },
+    })
     expect(test.calls).not.toContain('default-model')
+    expect(test.createdAgentOptions).toEqual({
+      provider: 'p',
+      model: 'm',
+      maxTokens: 10,
+      reasoningEffort: 'low',
+    })
     const withoutCap = harness()
     await create(withoutCap, { ...withoutCap.request, model: { provider: 'p', model: 'm' } })
     expect(withoutCap.calls).not.toContain('default-model')
+    expect(withoutCap.createdAgentOptions).toEqual({ provider: 'p', model: 'm' })
     await expect(modelRequestListener(withoutCap)(undefined, async () => ({
       provider: 'p', model: 'm', reasoningEffort: ReasoningEffortId('inherited'),
     }))).resolves.toEqual({ provider: 'p', model: 'm' })
@@ -281,6 +303,7 @@ describe('webhook Session creation', () => {
     [{ workspacePath: '/w', title: 't', prompt: 'p', agentPreset: 'a', permissionPreset: 'x', model: null }, /model must be an object/],
     [{ workspacePath: '/w', title: 't', prompt: 'p', agentPreset: 'a', permissionPreset: 'x', model: {} }, /provider/],
     [{ workspacePath: '/w', title: 't', prompt: 'p', agentPreset: 'a', permissionPreset: 'x', model: { provider: 'p', model: 'm', maxTokens: 0 } }, /maxTokens/],
+    [{ workspacePath: '/w', title: 't', prompt: 'p', agentPreset: 'a', permissionPreset: 'x', model: { provider: 'p', model: 'm', reasoningEffort: 123 } }, /reasoningEffort/],
   ] as const)('rejects malformed rule result %# before side effects', async (request, message) => {
     const test = harness()
     await expect(create(test, request as never)).rejects.toThrow(message)

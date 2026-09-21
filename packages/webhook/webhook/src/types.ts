@@ -1,5 +1,6 @@
 /** Provider-neutral webhook deliveries, rules, and Session requests. */
 
+import type { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { JsonValue } from '@deepseek-ai/dsh-util-values'
 import type { WebhookDeliveryId, WebhookRuleId, WebhookSourceId } from './brand.ts'
 
@@ -30,6 +31,8 @@ export interface WebhookModelSelection {
   readonly provider: string
   /** Provider-owned model id. */
   readonly model: string
+  /** Adapter-owned reasoning effort for the selected route. */
+  readonly reasoningEffort?: ReasoningEffortId
   /** Optional positive output-token cap. */
   readonly maxTokens?: number
 }
