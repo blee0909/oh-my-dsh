@@ -20,6 +20,7 @@
   - text: .
 - math: π 4 < θ < π 2
 - math: θ ∈ ( π 4 , π 2 ) . (1)
+- math: sec ⁡ g ( X , Y ) = 1 λ , Ω k = 0
 - table:
   - rowgroup:
     - row "Symbol Value":

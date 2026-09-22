@@ -57,6 +57,11 @@ function mathFixture(): string {
           '',
           '$$\\theta \\in \\left(\\frac{\\pi}{4}, \\frac{\\pi}{2}\\right). \\tag{1}$$',
           '',
+          // A dollar block whose closing fence ends a content line: everything
+          // after it must still settle as Markdown, not as one failing formula.
+          '$$\\sec_g(X, Y) = \\frac{1}{\\lambda},',
+          '\\qquad \\Omega^k = 0$$',
+          '',
           '| Symbol | Value |',
           '| --- | --- |',
           '| $\\theta$ | \\(\\frac{1}{5}\\) |',
@@ -119,8 +124,8 @@ describe('web e2e: settled Markdown math rendering', () => {
     await sessionRow.click()
     await expect.poll(() => page.getByText(DONE, { exact: true }).count(), { timeout: 15_000 }).toBe(1)
 
-    await expect.poll(() => page.locator('.katex').count(), { timeout: 10_000 }).toBe(6)
-    await expect.poll(() => page.locator('.katex-display').count(), { timeout: 10_000 }).toBe(2)
+    await expect.poll(() => page.locator('.katex').count(), { timeout: 10_000 }).toBe(7)
+    await expect.poll(() => page.locator('.katex-display').count(), { timeout: 10_000 }).toBe(3)
     expect(await page.locator('.katex-error').count()).toBe(0)
     await expect.poll(
       () => page.getByText('1 turns 1 steps', { exact: false }).count(),
