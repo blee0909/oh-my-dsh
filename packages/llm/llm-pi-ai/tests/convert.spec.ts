@@ -1009,6 +1009,20 @@ describe('mapStopReason / mapUsage', () => {
       kind: 'error',
       failure: { code: CONTEXT_WINDOW_EXCEEDED_CODE },
     })
+
+    // Truncated with one output token (Discussions #7214): providers can produce a tiny
+    // non-zero output (e.g. reasoning block "The") when truncating an oversized prompt.
+    // Ensure it does not escape to benign max-tokens when the prompt already fills the window.
+    const degenerateTruncated = assistant({
+      stopReason: 'length',
+      usage: usage(80, 1, 19),
+      content: [{ type: 'thinking', thinking: 'The' }],
+    })
+    expect(mapStopReason(degenerateTruncated)).toEqual({ kind: 'max-tokens' })
+    expect(mapStopReason(degenerateTruncated, 100)).toMatchObject({
+      kind: 'error',
+      failure: { code: CONTEXT_WINDOW_EXCEEDED_CODE },
+    })
   })
 
   it('maps cache fields only when nonzero', () => {

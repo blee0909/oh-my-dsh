@@ -79,11 +79,21 @@ function classifyPiAiError(message: string): string {
  *   to non-retryable `PI_AI_ERROR` failures.
  */
 export function mapStopReason(message: AssistantMessage, contextWindow?: number): FinishReason {
+  const promptTokens = message.usage
+    ? (message.usage.input + (message.usage.cacheRead ?? 0))
+    : 0
+  // pi-ai's isContextOverflow requires message.usage.output === 0 for length stops.
+  // When providers truncate an oversized prompt, they can emit a single token (or tiny output)
+  // before stopping with stopReason "length". If prompt tokens consume >= 99% of the resolved
+  // context window, this is context exhaustion rather than an intentional output limit (#7214).
+  const lengthOverflow = contextWindow !== undefined
+    && message.stopReason === 'length'
+    && promptTokens >= contextWindow * 0.99
   const piAiOverflow = isContextOverflow(message, contextWindow)
   const harnessOverflow = message.stopReason === 'error'
     && message.errorMessage !== undefined
     && isContextWindowExceededError(message.errorMessage)
-  if (piAiOverflow || harnessOverflow) {
+  if (piAiOverflow || harnessOverflow || lengthOverflow) {
     return {
       kind: 'error',
       failure: {
