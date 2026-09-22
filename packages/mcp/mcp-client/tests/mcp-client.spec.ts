@@ -536,6 +536,39 @@ describe('tool execution', () => {
     expect(textAt(result.content, 2)).toContain('not canonical base64')
   })
 
+  it('admits large valid canonical base64 images without call stack overflow (#7196)', async () => {
+    const rich = await mountRichRegistry()
+    Object.defineProperty(rich.attachments, 'imageLimits', {
+      value: {
+        ...rich.attachments.imageLimits,
+        maxImageBytes: 10 * 1024 * 1024,
+        maxMessageImageBytes: 10 * 1024 * 1024,
+      },
+    })
+    // 4,473,916 chars (> 3.35MB) previously threw RangeError: Maximum call stack size exceeded
+    const largeCanonical = 'A'.repeat(4473916)
+    const client = createMockClient(
+      [{ name: 'img', inputSchema: { type: 'object' } }],
+      { content: [{ type: 'image', mimeType: 'image/png', data: largeCanonical }] },
+    )
+
+    await syncTools(client as never, rich.ctx, defaultOpts, new Map())
+    const result = await rich.ctx.tools.execute({
+      signal: testToolSignal,
+      callId: ToolCallId('large-image'),
+      name: 'mcp__srv__img',
+      arguments: {},
+      agent: agentOn() as never,
+    })
+
+    expect(rich.attachments.saved).toHaveLength(1)
+    expect(result.content).toHaveLength(1)
+    const imageBlock = result.content[0]
+    if (imageBlock?.type !== 'image') throw new Error('expected image block')
+    expect(imageBlock.attachment.mediaType).toBe('image/png')
+    expect(imageBlock.attachment.bytes).toBe(3355437)
+  })
+
   it('does not admit images for a route without declared image input', async () => {
     const rich = await mountRichRegistry()
     const client = createMockClient(

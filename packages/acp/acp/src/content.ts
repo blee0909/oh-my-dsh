@@ -15,8 +15,8 @@ const IMAGE_MEDIA_TYPES: readonly ImageMediaType[] = [
   'image/gif',
 ]
 
-/** Canonical RFC 4648 base64, excluding whitespace and URL-safe aliases. */
-const CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+/** Canonical RFC 4648 base64 characters, without nested quantifier backtracking. */
+const CANONICAL_BASE64 = /^[A-Za-z0-9+/]*={0,2}$/
 
 /** Content-admission failure category used by the protocol handler. */
 export type AcpContentFailureKind = 'invalid' | 'internal'
@@ -49,7 +49,7 @@ function decodeImage(block: Extract<AcpContentBlock, { type: 'image' }>): SaveIm
   if (mediaType === undefined) {
     throw new AcpContentError('image mimeType must be image/png, image/jpeg, image/webp, or image/gif', 'invalid')
   }
-  if (!CANONICAL_BASE64.test(block.data)) {
+  if (block.data.length % 4 !== 0 || !CANONICAL_BASE64.test(block.data)) {
     throw new AcpContentError('image data must be canonical base64', 'invalid')
   }
   const data = Buffer.from(block.data, 'base64')

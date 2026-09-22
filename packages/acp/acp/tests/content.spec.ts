@@ -229,4 +229,15 @@ describe('ACP rich content codec', () => {
       type: 'image', data: 'AQ==', mimeType: 'image/png',
     })
   })
+
+  it('admits large valid canonical base64 images without call stack overflow (#7196)', async () => {
+    const fixture = admissionFixture()
+    const signal = new AbortController().signal
+    // 4,473,916 chars (> 3.35MB) previously threw RangeError: Maximum call stack size exceeded
+    const largeCanonical = 'A'.repeat(4473916)
+    await expect(admitAcpPrompt(fixture.ctx, fixture.route, [
+      { type: 'image', data: largeCanonical, mimeType: 'image/png' },
+    ], true, signal)).resolves.toBeDefined()
+    expect(fixture.saveImages).toHaveBeenCalledOnce()
+  })
 })
