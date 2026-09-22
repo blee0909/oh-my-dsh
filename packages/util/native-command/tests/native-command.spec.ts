@@ -40,4 +40,14 @@ describe('runNativeCommand', () => {
     expect(failure).toBeInstanceOf(Error)
     expect((failure as { code?: unknown }).code).toBe('ABORT_ERR')
   })
+
+  it('accepts optional execution options such as windowsHide false', async () => {
+    const result = await runNativeCommand(
+      node,
+      ['-e', 'process.stdout.write("visible")'],
+      new AbortController().signal,
+      { windowsHide: false },
+    )
+    expect(result).toEqual({ stdout: 'visible', stderr: '' })
+  })
 })

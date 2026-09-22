@@ -244,7 +244,7 @@ export async function revealNativePath(
       if (windowsPath === '') throw new Error('wslpath returned no Windows path')
     }
     try {
-      await run('explorer.exe', [`/select,${windowsPath}`], signal)
+      await run('explorer.exe', ['/select,', windowsPath], signal, { windowsHide: false })
     } catch (error) {
       signal.throwIfAborted()
       // Explorer can exit 1 after delegating to the existing desktop process.
