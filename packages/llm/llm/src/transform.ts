@@ -40,11 +40,11 @@ export const HEAD_CHARS = 12_800
 export const TAIL_CHARS = 12_800
 
 /** Extract text content recursively from a sequence of content blocks. */
-function extractTextFromBlocks(blocks: readonly ContentBlock[]): string {
+function extractTextFromBlocks(blocks: readonly unknown[]): string {
   return blocks
-    .map((b) => {
-      if (b.type === 'text') return b.text
-      if (b.type === 'tool-result') return extractTextFromBlocks(b.content)
+    .map((b: any) => {
+      if (b?.type === 'text') return b.text
+      if (b?.type === 'tool-result' && Array.isArray(b.content)) return extractTextFromBlocks(b.content)
       return ''
     })
     .filter(Boolean)
@@ -61,18 +61,18 @@ function truncateTextUnderBudget(text: string): string {
 }
 
 /** Sanitize and defensively truncate tool-result blocks within budget. */
-function sanitizeToolResultBlocks(blocks: readonly ContentBlock[]): { blocks: ContentBlock[]; modified: boolean } {
+function sanitizeToolResultBlocks(blocks: readonly unknown[]): { blocks: ContentBlock[]; modified: boolean } {
   let changed = false
   const sanitized: ContentBlock[] = []
 
-  for (const block of blocks) {
-    if (block.type === 'text' && block.text.length > MAX_TOOL_OUTPUT_CHARS) {
+  for (const block of (blocks as any[])) {
+    if (block?.type === 'text' && typeof block.text === 'string' && block.text.length > MAX_TOOL_OUTPUT_CHARS) {
       changed = true
       sanitized.push({
         type: 'text',
         text: truncateTextUnderBudget(block.text),
       })
-    } else if (block.type === 'tool-result') {
+    } else if (block?.type === 'tool-result' && Array.isArray(block.content)) {
       const nested = sanitizeToolResultBlocks(block.content)
       if (nested.modified) {
         changed = true
@@ -171,12 +171,12 @@ export function transformMessages(
 
     // 1. User messages (can carry tool results, commentary text, or fresh prompts)
     if (msg.role === 'user') {
-      const toolResults = msg.content.filter(b => b.type === 'tool-result')
+      const toolResults = (msg.content as any[]).filter(b => b?.type === 'tool-result')
       const textBlocks = msg.content.filter(b => b.type === 'text')
 
       // Mark which pending tool calls are successfully satisfied by this user turn
       for (const res of toolResults) {
-        if (res.type === 'tool-result') {
+        if (typeof res?.toolCallId === 'string') {
           pendingToolCalls.delete(res.toolCallId)
         }
       }
@@ -191,8 +191,8 @@ export function transformMessages(
       let userTurnModified = false
       const sanitizedContent: ContentBlock[] = []
 
-      for (const block of msg.content) {
-        if (block.type === 'tool-result') {
+      for (const block of (msg.content as any[])) {
+        if (block?.type === 'tool-result') {
           if (!knownToolCalls.has(block.toolCallId)) {
             // Reverse-orphan tool-result: downgrade to text representation
             userTurnModified = true
@@ -298,6 +298,28 @@ export function transformMessages(
       continue
     }
 
+    // 3. Tool result messages (role === 'tool', upstream v0.1.7)
+    if (msg.role === 'tool') {
+      const toolCallId = (msg as any).toolCallId ?? (msg as any).source?.callId
+      if (typeof toolCallId === 'string') {
+        pendingToolCalls.delete(toolCallId as ToolCallId)
+      }
+
+      const sanitized = sanitizeToolResultBlocks(msg.content)
+      if (sanitized.modified) {
+        modified = true
+        staged.push(
+          freezeMessage({
+            ...msg,
+            content: sanitized.blocks,
+          }),
+        )
+      } else {
+        staged.push(msg)
+      }
+      continue
+    }
+
     // Other roles
     staged.push(msg)
   }
@@ -311,7 +333,7 @@ export function transformMessages(
   for (let i = 1; i < staged.length; i++) {
     const curr = staged[i]
     const prev = staged[i - 1]
-    if (curr && prev && curr.role === prev.role && curr.source?.kind !== 'plugin' && prev.source?.kind !== 'plugin') {
+    if (curr && prev && curr.role === prev.role && curr.role !== 'tool' && (curr.source as any)?.kind !== 'plugin' && (prev.source as any)?.kind !== 'plugin') {
       needsCoalesce = true
       break
     }
@@ -328,7 +350,7 @@ export function transformMessages(
 
   for (const msg of staged) {
     const prev = coalesced[coalesced.length - 1]
-    if (prev && prev.role === msg.role && prev.source?.kind !== 'plugin' && msg.source?.kind !== 'plugin') {
+    if (prev && prev.role === msg.role && msg.role !== 'tool' && (prev.source as any)?.kind !== 'plugin' && (msg.source as any)?.kind !== 'plugin') {
       const mergedBlocks = coalesceBlocks(prev.content, msg.content)
       coalesced[coalesced.length - 1] = freezeMessage({
         ...prev,

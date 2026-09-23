@@ -13,8 +13,8 @@ function callName(node: ToolCallBlock): string {
 
 /** One atomic call dispatched through the Tool-owned keyed slot. */
 const ToolCall = memo(function ToolCall({
-  renderSlot, callId, toolName, block, openFile, cwd, home, inspectCall, loadImage, renderMessageImages, t, children,
-}: Pick<ToolTreeProps, 'renderSlot' | 'openFile' | 'cwd' | 'inspectCall' | 'loadImage' | 't'> & {
+  renderSlot, callId, toolName, block, openFile, cwd, home, inspectCall, loadImage, useDisclosure, renderMessageImages, t, children,
+}: Pick<ToolTreeProps, 'renderSlot' | 'openFile' | 'cwd' | 'inspectCall' | 'loadImage' | 'useDisclosure' | 't'> & {
   callId: string
   toolName: string
   block: ToolCallBlock
@@ -30,9 +30,10 @@ const ToolCall = memo(function ToolCall({
     cwd,
     home,
     loadImage,
+    useDisclosure,
     renderMessageImages,
-    inspect: () => { inspectCall(callId) },
-  }), [callId, toolName, block, openFile, cwd, home, loadImage, renderMessageImages, inspectCall])
+    inspect: inspectCall === undefined ? undefined : () => { inspectCall(callId) },
+  }), [callId, toolName, block, openFile, cwd, home, loadImage, renderMessageImages, inspectCall, useDisclosure])
   const autoReviewDenied = useMemo(
     () => toolRowModel(toolName, block).autoReviewDenial !== null,
     [toolName, block],
@@ -55,8 +56,8 @@ const ToolCall = memo(function ToolCall({
 })
 
 const ToolCallBranch = memo(function ToolCallBranch({
-  renderSlot, block, cwd, home, openFile, inspectCall, loadImage, renderMessageImages, t,
-}: Pick<ToolTreeProps, 'renderSlot' | 'cwd' | 'openFile' | 'inspectCall' | 'loadImage' | 't'> & {
+  renderSlot, block, cwd, home, openFile, inspectCall, loadImage, useDisclosure, renderMessageImages, t,
+}: Pick<ToolTreeProps, 'renderSlot' | 'cwd' | 'openFile' | 'inspectCall' | 'loadImage' | 'useDisclosure' | 't'> & {
   block: ToolCallBlock
   home?: string | undefined
   renderMessageImages?: ToolTreeProps['renderMessageImages'] | undefined
@@ -71,6 +72,7 @@ const ToolCallBranch = memo(function ToolCallBranch({
       cwd={cwd}
       home={home}
       inspectCall={inspectCall}
+      useDisclosure={useDisclosure}
       loadImage={loadImage}
       renderMessageImages={renderMessageImages}
       t={t}
@@ -86,6 +88,7 @@ const ToolCallBranch = memo(function ToolCallBranch({
               home={home}
               openFile={openFile}
               inspectCall={inspectCall}
+              useDisclosure={useDisclosure}
               loadImage={loadImage}
               renderMessageImages={renderMessageImages}
               t={t}
@@ -104,7 +107,7 @@ const ToolCallBranch = memo(function ToolCallBranch({
  * @returns the Tool call tree.
  */
 export function ToolCallTree({
-  renderSlot, node, cwd, openFile, inspectCall, loadImage, renderMessageImages, useHostInfo, t,
+  renderSlot, node, cwd, openFile, inspectCall, loadImage, useDisclosure, renderMessageImages, useHostInfo, t,
 }: ToolTreeProps) {
   const home = useHostInfo(info => info.home)
   const block = node.data.root
@@ -116,6 +119,7 @@ export function ToolCallTree({
       home={home}
       openFile={openFile}
       inspectCall={inspectCall}
+      useDisclosure={useDisclosure}
       loadImage={loadImage}
       renderMessageImages={renderMessageImages}
       t={t}

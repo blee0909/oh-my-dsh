@@ -90,8 +90,8 @@ describe('SessionProjectionCache LRU eviction & Memory Management (#5772)', () =
     await cache.write(s2)
 
     // Both s1 and s2 should be cached
-    expect(cache.cachedSnapshot(s1.header, SessionLogOffset(0))).toBeDefined()
-    expect(cache.cachedSnapshot(s2.header, SessionLogOffset(0))).toBeDefined()
+    expect(cache.cachedSnapshot(s1.header)).toBeDefined()
+    expect(cache.cachedSnapshot(s2.header)).toBeDefined()
 
     // Create s3, exceeding maxCachedSessions = 2
     const s3 = ctx.sessions.create()
@@ -99,9 +99,9 @@ describe('SessionProjectionCache LRU eviction & Memory Management (#5772)', () =
     await cache.write(s3)
 
     // s1 was the oldest, so it should be evicted from in-memory cache
-    expect(cache.cachedSnapshot(s1.header, SessionLogOffset(0))).toBeUndefined()
-    expect(cache.cachedSnapshot(s2.header, SessionLogOffset(0))).toBeDefined()
-    expect(cache.cachedSnapshot(s3.header, SessionLogOffset(0))).toBeDefined()
+    expect(cache.cachedSnapshot(s1.header)).toBeUndefined()
+    expect(cache.cachedSnapshot(s2.header)).toBeDefined()
+    expect(cache.cachedSnapshot(s3.header)).toBeDefined()
 
     // The underlying table records map should also have had s1 removed
     const internalCache = cache as unknown as { table?: { records?: Map<string, unknown> } }
@@ -127,7 +127,7 @@ describe('SessionProjectionCache LRU eviction & Memory Management (#5772)', () =
     await cache.write(s3)
 
     // s1 was evicted
-    expect(cache.cachedSnapshot(s1.header, SessionLogOffset(0))).toBeUndefined()
+    expect(cache.cachedSnapshot(s1.header)).toBeUndefined()
 
     // Perform coldSnapshot on s1
     const coldSnapshot = cache.coldSnapshot(
@@ -139,9 +139,9 @@ describe('SessionProjectionCache LRU eviction & Memory Management (#5772)', () =
 
     // s1 is refreshed back into cache asynchronously, and s2 (now oldest) is evicted
     await vi.waitFor(() => {
-      expect(cache.cachedSnapshot(s1.header, SessionLogOffset(0))).toBeDefined()
-      expect(cache.cachedSnapshot(s2.header, SessionLogOffset(0))).toBeUndefined()
-      expect(cache.cachedSnapshot(s3.header, SessionLogOffset(0))).toBeDefined()
+      expect(cache.cachedSnapshot(s1.header)).toBeDefined()
+      expect(cache.cachedSnapshot(s2.header)).toBeUndefined()
+      expect(cache.cachedSnapshot(s3.header)).toBeDefined()
     }, { timeout: 5_000 })
   })
 
@@ -157,12 +157,12 @@ describe('SessionProjectionCache LRU eviction & Memory Management (#5772)', () =
     await cache.write(s2)
 
     // Two hits
-    expect(cache.cachedSnapshot(s1.header, SessionLogOffset(0))).toBeDefined()
-    expect(cache.cachedSnapshot(s2.header, SessionLogOffset(0))).toBeDefined()
+    expect(cache.cachedSnapshot(s1.header)).toBeDefined()
+    expect(cache.cachedSnapshot(s2.header)).toBeDefined()
 
     // One miss with unwritten session
     const sUnwritten = ctx.sessions.create()
-    expect(cache.cachedSnapshot(sUnwritten.header, SessionLogOffset(0))).toBeUndefined()
+    expect(cache.cachedSnapshot(sUnwritten.header)).toBeUndefined()
 
     // Exceed maxCachedSessions = 2 -> 1 eviction
     const s3 = ctx.sessions.create()
@@ -170,7 +170,7 @@ describe('SessionProjectionCache LRU eviction & Memory Management (#5772)', () =
     await cache.write(s3)
 
     // s1 was evicted -> 1 miss
-    expect(cache.cachedSnapshot(s1.header, SessionLogOffset(0))).toBeUndefined()
+    expect(cache.cachedSnapshot(s1.header)).toBeUndefined()
 
     // 1 cold replay
     cache.coldSnapshot(s1.header, SessionLogOffset(0), s1.snapshotEvents())

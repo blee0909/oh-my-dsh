@@ -201,6 +201,7 @@
 .tableScroll:global(.md-table-wide) {
   overflow-x: auto;
   scrollbar-width: thin;
+  padding-bottom: var(--dsh-scrollbar-width, 5px);
 }
 
 .tableScroll:global(.md-table-wide):hover,
@@ -391,24 +392,6 @@
 .compact :global(.md-code-block) > :has(> [data-code-block-banner]) {
   position: static;
   z-index: auto;
-}
-
-.compact [data-code-block-banner] {
-  padding: 4px 8px;
-  font: inherit;
-}
-
-.compact [data-code-block-banner] > :first-child {
-  font-size: inherit;
-  line-height: inherit;
-  color: inherit;
-}
-
-.compact pre {
-  margin: 4px 0;
-  padding: 8px;
-  font-size: inherit;
-  line-height: inherit;
 }
 
 /* Shiki writes token colors inline; compact code uses the surrounding text color. */

@@ -10,6 +10,7 @@ import { zh } from '@deepseek-ai/dsh-client-ui-conversation/src/client/locales.t
 import type { MessageImageLoader, RenderMessageImages } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { resultImageCard } from '../src/client/tool/models/image-card-model.ts'
 import { GenericToolCard } from '../src/client/tool/toolviews/GenericToolCard.tsx'
+import { useDisclosure } from '@deepseek-ai/dsh-client-ui-chat/src/client/chat/use-disclosure.ts'
 
 afterEach(cleanup)
 
@@ -118,6 +119,7 @@ describe('GenericToolCard image rendering (Discussions #6475)', () => {
         block={textNode}
         openFile={vi.fn()}
         loadImage={loadImage}
+        useDisclosure={useDisclosure}
         t={t}
       />,
     )
@@ -151,6 +153,7 @@ describe('GenericToolCard image rendering (Discussions #6475)', () => {
         openFile={vi.fn()}
         loadImage={loadImage}
         renderMessageImages={renderMessageImages}
+        useDisclosure={useDisclosure}
         t={t}
       />,
     )
@@ -178,6 +181,7 @@ describe('GenericToolCard image rendering (Discussions #6475)', () => {
         block={node}
         openFile={vi.fn()}
         loadImage={loadImage}
+        useDisclosure={useDisclosure}
         t={t}
       />,
     )

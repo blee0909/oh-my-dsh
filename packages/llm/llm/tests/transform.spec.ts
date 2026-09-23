@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   createAssistantMessage,
-  createMessage,
+  createSystemMessage,
+  createToolResultMessage,
   createUserMessage,
 } from '../src/message.ts'
 import { ToolCallId } from '../src/brand.ts'
@@ -59,13 +60,10 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
         }],
         source: { provider: 'deepseek-official', model: 'deepseek-chat' },
       })
-      const toolResultUser = createUserMessage({
-        content: [{
-          type: 'tool-result',
-          toolCallId: ToolCallId('call_test_1'),
-          content: [{ type: 'text', text: 'file content' }],
-        }],
-        source: { kind: 'user' },
+      const toolResultUser = createToolResultMessage({
+        callId: ToolCallId('call_test_1'),
+        content: [{ type: 'text', text: 'file content' }],
+        isError: false,
       })
 
       const transformed = transformMessages([toolCallAssistant, toolResultUser])
@@ -78,7 +76,7 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
   })
 
   describe('Isolated Tool-Call Auto-Healing (#5445)', () => {
-    it('synthesizes missing tool-result and coalesces with subsequent user prompt for strict alternation', () => {
+    it('synthesizes missing tool-result and preserves subsequent user prompt for strict alternation', () => {
       const turn1User = createUserMessage({
         content: [{ type: 'text', text: '请帮我查看文件' }],
         source: { kind: 'user' },
@@ -100,20 +98,17 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
 
       const transformed = transformMessages([turn1User, turn1Assistant, turn2User])
 
-      // Should coalesce the synthetic tool-result with turn2User so roles strictly alternate (User -> Assistant -> User)
-      expect(transformed).toHaveLength(3)
+      // Should synthesize missing tool result before user turn
+      expect(transformed).toHaveLength(4)
       expect(transformed[0]!.role).toBe('user')
       expect(transformed[1]!.role).toBe('assistant')
+      expect(transformed[2]!.role).toBe('tool')
+      expect((transformed[2] as any).toolCallId).toBe('call_orphan_1')
+      expect((transformed[2] as any).isError).toBe(true)
 
-      const coalescedUserMsg = transformed[2]!
-      expect(coalescedUserMsg.role).toBe('user')
-      // Content contains both the synthetic tool result and user's follow-up prompt
-      const resultBlocks = coalescedUserMsg.content.filter(b => b.type === 'tool-result')
-      expect(resultBlocks).toHaveLength(1)
-      expect(resultBlocks[0]!.toolCallId).toBe('call_orphan_1')
-      expect(resultBlocks[0]!.isError).toBe(true)
-
-      const textBlocks = coalescedUserMsg.content.filter(b => b.type === 'text')
+      const followUpUserMsg = transformed[3]!
+      expect(followUpUserMsg.role).toBe('user')
+      const textBlocks = followUpUserMsg.content.filter(b => b.type === 'text')
       expect(textBlocks).toHaveLength(1)
       expect(textBlocks[0]!.text).toBe('重新来过')
     })
@@ -128,41 +123,41 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
         source: { provider: 'test', model: 'test' },
       })
 
-      // User returns only call_2 result, but adds commentary text (mixed content)
-      const mixedUserTurn = createUserMessage({
-        content: [
-          { type: 'text', text: '部分文件读取失败，只找到了 B' },
-          { type: 'tool-result', toolCallId: ToolCallId('call_2'), content: [{ type: 'text', text: 'content of b' }] },
-        ],
+      // User returns only call_2 result, followed by commentary text
+      const call2Result = createToolResultMessage({
+        callId: ToolCallId('call_2'),
+        content: [{ type: 'text', text: 'content of b' }],
+        isError: false,
+      })
+      const commentaryUser = createUserMessage({
+        content: [{ type: 'text', text: '部分文件读取失败，只找到了 B' }],
         source: { kind: 'user' },
       })
 
-      const transformed = transformMessages([assistantMultiCall, mixedUserTurn])
+      const transformed = transformMessages([assistantMultiCall, call2Result, commentaryUser])
 
       // Must have healed the missing call_1 and call_3 without duplicating call_2
-      const allResults = transformed.flatMap(m => m.content).filter(b => b.type === 'tool-result')
-      expect(allResults).toHaveLength(3)
+      const toolResults = transformed.filter(m => m.role === 'tool')
+      expect(toolResults).toHaveLength(3)
 
-      const answeredIds = allResults.map(r => r.type === 'tool-result' ? r.toolCallId : '')
+      const answeredIds = toolResults.map(m => (m as any).toolCallId)
       expect(answeredIds).toContain('call_1')
       expect(answeredIds).toContain('call_2')
       expect(answeredIds).toContain('call_3')
 
-      type ToolResultWithError = { isError?: boolean }
-      // call_2 was real, call_1 and call_3 were synthetically marked as errors
-      const call2Result = allResults.find(r => r.type === 'tool-result' && r.toolCallId === 'call_2') as ToolResultWithError | undefined
-      expect(call2Result?.isError).toBeUndefined()
+      const call2 = toolResults.find(m => (m as any).toolCallId === 'call_2')
+      expect((call2 as any).isError).toBe(false)
 
-      const call1Result = allResults.find(r => r.type === 'tool-result' && r.toolCallId === 'call_1') as ToolResultWithError | undefined
-      expect(call1Result?.isError).toBe(true)
+      const call1 = toolResults.find(m => (m as any).toolCallId === 'call_1')
+      expect((call1 as any).isError).toBe(true)
 
-      const call3Result = allResults.find(r => r.type === 'tool-result' && r.toolCallId === 'call_3') as ToolResultWithError | undefined
-      expect(call3Result?.isError).toBe(true)
+      const call3 = toolResults.find(m => (m as any).toolCallId === 'call_3')
+      expect((call3 as any).isError).toBe(true)
 
-      // Strict alternation: Assistant -> User
-      expect(transformed).toHaveLength(2)
+      // Total messages: assistant -> 3 tool results -> user commentary
+      expect(transformed).toHaveLength(5)
       expect(transformed[0]!.role).toBe('assistant')
-      expect(transformed[1]!.role).toBe('user')
+      expect(transformed[4]!.role).toBe('user')
     })
 
     it('auto-heals conversations ending abruptly with dangling unclosed tool calls (tail truncation)', () => {
@@ -178,14 +173,11 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
 
       expect(transformed).toHaveLength(2)
       expect(transformed[0]!.role).toBe('assistant')
-      expect(transformed[1]!.role).toBe('user')
+      expect(transformed[1]!.role).toBe('tool')
 
-      const tailResult = transformed[1]!.content[0]!
-      expect(tailResult.type).toBe('tool-result')
-      if (tailResult.type === 'tool-result') {
-        expect(tailResult.toolCallId).toBe('call_tail_1')
-        expect(tailResult.isError).toBe(true)
-      }
+      const tailResult = transformed[1]!
+      expect((tailResult as any).toolCallId).toBe('call_tail_1')
+      expect((tailResult as any).isError).toBe(true)
     })
   })
 
@@ -217,21 +209,13 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
     })
 
     it('safely converts in-history system messages into user directives with seamless coalescence', () => {
-      const leadingSystem = createMessage({
-        role: 'system',
-        content: [{ type: 'text', text: 'You are a helpful coding assistant.' }],
-        source: { kind: 'user' },
-      })
+      const leadingSystem = createSystemMessage('You are a helpful coding assistant.')
       const user1 = createUserMessage({
         content: [{ type: 'text', text: 'Write a quicksort function.' }],
         source: { kind: 'user' },
       })
       // Dynamically injected system directive mid-session
-      const midSystem = createMessage({
-        role: 'system',
-        content: [{ type: 'text', text: 'Memory limit is 256MB.' }],
-        source: { kind: 'user' },
-      })
+      const midSystem = createSystemMessage('Memory limit is 256MB.')
       const assistant = createAssistantMessage({
         content: [{ type: 'text', text: 'Here is the memory-optimized quicksort...' }],
         source: { provider: 'test', model: 'test' },
@@ -259,7 +243,7 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
           type: 'tool-result',
           toolCallId: ToolCallId('call_lost_1'),
           content: [{ type: 'text', text: 'Output of forgotten call' }],
-        }],
+        } as any],
         source: { kind: 'user' },
       })
       const assistant = createAssistantMessage({
@@ -296,34 +280,29 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
       const middlePadding = 'x'.repeat(120_000 - headPrefix.length - tailSuffix.length)
       const massiveLog = `${headPrefix}${middlePadding}${tailSuffix}`
 
-      const userToolResult = createUserMessage({
-        content: [{
-          type: 'tool-result',
-          toolCallId: ToolCallId('call_giant_output'),
-          content: [{ type: 'text', text: massiveLog }],
-        }],
-        source: { kind: 'user' },
+      const userToolResult = createToolResultMessage({
+        callId: ToolCallId('call_giant_output'),
+        content: [{ type: 'text', text: massiveLog }],
+        isError: false,
       })
 
       const transformed = transformMessages([assistantCall, userToolResult])
 
       expect(transformed).toHaveLength(2)
-      const resBlock = transformed[1]!.content[0]!
-      expect(resBlock.type).toBe('tool-result')
-      if (resBlock.type === 'tool-result') {
-        const textBlock = resBlock.content[0]!
-        expect(textBlock.type).toBe('text')
-        if (textBlock.type === 'text') {
-          // Verify head is preserved
-          expect(textBlock.text.startsWith(headPrefix)).toBe(true)
-          // Verify tail is preserved
-          expect(textBlock.text.endsWith(tailSuffix)).toBe(true)
-          // Verify system guard notice is present
-          expect(textBlock.text).toContain('DSH System Guard: Tool output truncated')
-          // Total length must be strictly bounded (~26,000 chars << 64,000 max)
-          expect(textBlock.text.length).toBeLessThan(MAX_TOOL_OUTPUT_CHARS)
-          expect(textBlock.text.length).toBeGreaterThan(HEAD_CHARS + TAIL_CHARS)
-        }
+      const resMsg = transformed[1]!
+      expect(resMsg.role).toBe('tool')
+      const textBlock = resMsg.content[0]!
+      expect(textBlock.type).toBe('text')
+      if (textBlock.type === 'text') {
+        // Verify head is preserved
+        expect(textBlock.text.startsWith(headPrefix)).toBe(true)
+        // Verify tail is preserved
+        expect(textBlock.text.endsWith(tailSuffix)).toBe(true)
+        // Verify system guard notice is present
+        expect(textBlock.text).toContain('DSH System Guard: Tool output truncated')
+        // Total length must be strictly bounded (~26,000 chars << 64,000 max)
+        expect(textBlock.text.length).toBeLessThan(MAX_TOOL_OUTPUT_CHARS)
+        expect(textBlock.text.length).toBeGreaterThan(HEAD_CHARS + TAIL_CHARS)
       }
     })
   })
@@ -365,13 +344,10 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
         ],
         source: { provider: 'google-antigravity', model: 'gemini-3.8-flash' },
       })
-      const userToolResult = createUserMessage({
-        content: [{
-          type: 'tool-result',
-          toolCallId: ToolCallId('call_antigravity_1'),
-          content: [{ type: 'text', text: '{"data":"ok"}' }],
-        }],
-        source: { kind: 'user' },
+      const userToolResult = createToolResultMessage({
+        callId: ToolCallId('call_antigravity_1'),
+        content: [{ type: 'text', text: '{"data":"ok"}' }],
+        isError: false,
       })
 
       const transformed = transformMessages([assistantWithEmptyTextAndTool, userToolResult])
@@ -406,13 +382,10 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
         ],
         source: { provider: 'google-antigravity', model: 'gemini-3.8-flash' },
       })
-      const userToolResult = createUserMessage({
-        content: [{
-          type: 'tool-result',
-          toolCallId: ToolCallId('call_search_2'),
-          content: [{ type: 'text', text: 'results found' }],
-        }],
-        source: { kind: 'user' },
+      const userToolResult = createToolResultMessage({
+        callId: ToolCallId('call_search_2'),
+        content: [{ type: 'text', text: 'results found' }],
+        isError: false,
       })
 
       const transformed = transformMessages([mixedAssistant, userToolResult])
