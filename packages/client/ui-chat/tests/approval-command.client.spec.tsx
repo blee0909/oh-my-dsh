@@ -33,8 +33,8 @@ describe('ApprovalCommand', () => {
   it('renders the running correlated Tool command', () => {
     render(<ApprovalCommand {...props([
       { kind: 'assistant-step', data: {} },
-      { kind: 'tool-call', data: { root: { callId: 'other', argsRaw: '{"command":"wrong"}' } } },
-      { kind: 'tool-call', data: { root: { callId: 'call-1', argsRaw: '{"command":"pnpm test"}' } } },
+      { kind: 'tool-call', data: { root: { phase: 'start', callId: 'other', argsRaw: '{"command":"wrong"}' } } },
+      { kind: 'tool-call', data: { root: { phase: 'start', callId: 'call-1', argsRaw: '{"command":"pnpm test"}' } } },
     ] as never)} />)
 
     expect(screen.getByText('pnpm test')).toBeTruthy()
@@ -76,11 +76,12 @@ describe('ApprovalCommand', () => {
     expect(screen.getByText('git status')).toBeTruthy()
   })
 
-  it('omits absent, uncorrelated, and settled Tool calls', () => {
+  it('omits absent, uncorrelated, preparing, and settled Tool calls', () => {
     const { container, rerender } = render(<ApprovalCommand {...props([
       { kind: 'assistant-step', data: {} },
       { kind: 'tool-call', data: { root: undefined } },
-      { kind: 'tool-call', data: { root: { callId: 'other', argsRaw: '{}' } } },
+      { kind: 'tool-call', data: { root: { phase: 'start', callId: 'other', argsRaw: '{}' } } },
+      { kind: 'tool-call', data: { root: { phase: 'preparing', callId: 'call-1', name: 'bash' } } },
       {
         kind: 'tool-call',
         data: { root: { kind: 'tool-result', callId: 'call-1', argsRaw: '{"command":"ignored"}' } },
@@ -89,7 +90,7 @@ describe('ApprovalCommand', () => {
     expect(container.textContent).toBe('')
 
     rerender(<ApprovalCommand {...props([
-      { kind: 'tool-call', data: { root: { callId: 'call-1', argsRaw: '{}' } } },
+      { kind: 'tool-call', data: { root: { phase: 'start', callId: 'call-1', argsRaw: '{}' } } },
     ] as never)} />)
     expect(container.textContent).toBe('')
   })

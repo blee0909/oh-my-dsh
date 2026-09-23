@@ -23,10 +23,12 @@ function env(values: Record<string, string>): EnvLookup {
   const folded = FOLDS_ENV_CASE
     ? Object.fromEntries(Object.entries(values).map(([name, value]) => [name.toUpperCase(), value]))
     : values
-  return { get: (name) => {
-    const value = folded[FOLDS_ENV_CASE ? name.toUpperCase() : name]
-    return value === undefined ? undefined : { value }
-  } }
+  return {
+    get: (name) => {
+      const value = folded[FOLDS_ENV_CASE ? name.toUpperCase() : name]
+      return value === undefined ? undefined : { value }
+    },
+  }
 }
 
 
@@ -147,7 +149,7 @@ describe('resolveProxyPolicy', () => {
   })
 
   it('reports a SOCKS proxy instead of silently ignoring it', () => {
-    const { policy, diagnostics } = resolveProxyPolicy(env({ HTTP_PROXY: 'socks5://127.0.0.1:7890' }))
+    const { policy, diagnostics } = resolveProxyPolicy(env({ HTTP_PROXY: 'socks5://127.0.0.1:10810' }))
     expect(policy).toEqual(DIRECT_POLICY)
     expect(diagnostics).toHaveLength(1)
     expect(diagnostics[0]?.kind).toBe('socks')

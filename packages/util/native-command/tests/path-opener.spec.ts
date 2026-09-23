@@ -56,15 +56,7 @@ describe('native path opener', () => {
     })
     expect(run.mock.calls).toEqual([
       ['wslpath', ['-w', '/home/test user/settings.yaml'], requestSignal],
-      [
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-Command',
-          "Invoke-Item -LiteralPath '\\\\wsl.localhost\\Ubuntu\\home\\test user\\settings.yaml'",
-        ],
-        requestSignal,
-      ],
+      ['explorer.exe', ['file://wsl.localhost/Ubuntu/home/test%20user/settings.yaml'], requestSignal],
     ])
   })
 
@@ -88,12 +80,55 @@ describe('native path opener', () => {
     expect(run).toHaveBeenCalledOnce()
   })
 
-  it('opens with Windows Invoke-Item and escapes single quotes', async () => {
+  it.each([
+    // Explorer parses its own command line and splits fields at commas and
+    // equals signs, and libuv quotes an argument only when it holds a space, so
+    // the encoded file URI is what keeps the whole path in one field. Only those
+    // two separators are escaped on top of the URI's own encoding: Explorer
+    // rejects percent-encoded non-ASCII and opens Documents instead, while it
+    // resolves the literal characters, so `报告` stays literal here. UNC takes
+    // the same encoding.
+    ["C:\\work\\o'reilly, & 100%.txt", "file:///C:/work/o'reilly%2C%20&%20100%25.txt"],
+    ['C:\\work\\plain.txt', 'file:///C:/work/plain.txt'],
+    ['C:\\work\\my report.txt', 'file:///C:/work/my%20report.txt'],
+    ['C:\\work\\key=value.txt', 'file:///C:/work/key%3Dvalue.txt'],
+    ['C:\\my files\\报告,#%.txt', 'file:///C:/my%20files/报告%2C%23%25.txt'],
+    ['C:\\目录\\a,b=c.txt', 'file:///C:/目录/a%2Cb%3Dc.txt'],
+    ['C:\\工作\\报告 2026.txt', 'file:///C:/工作/报告%202026.txt'],
+    ['\\\\server\\share\\a,b.txt', 'file://server/share/a%2Cb.txt'],
+    // Node resolves the path before encoding it, so a verbatim prefix is not
+    // part of the target: `\\?\` and `\\?\UNC\` arrive as the ordinary drive or
+    // UNC URI. A device-namespace path takes that same UNC handling; it names a
+    // device rather than a shell item, which this opener does not open.
+    ['\\\\?\\C:\\work\\a,b.txt', 'file:///C:/work/a%2Cb.txt'],
+    ['\\\\?\\UNC\\server\\share\\a,b.txt', 'file://server/share/a%2Cb.txt'],
+    ['\\\\.\\C:\\work\\a,b.txt', 'file://./C:/work/a%2Cb.txt'],
+    ['\\\\wsl$\\Ubuntu\\home\\t,est a.txt', 'file://wsl$/Ubuntu/home/t%2Cest%20a.txt'],
+  ] as const)('opens %s through the one encoded Explorer target', async (path, target) => {
     const run = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
-    await openNativePath("C:\\work\\o'reilly.txt", signal(), { platform: 'win32', run })
+    await openNativePath(path, signal(), { platform: 'win32', run })
+    expect(run).toHaveBeenCalledExactlyOnceWith('explorer.exe', [target], expect.any(AbortSignal))
+  })
+
+  // Node restores a trailing separator against the host's `path.sep`, so a
+  // separator-terminated Windows path encodes differently on the Windows host
+  // this opener runs on than on the POSIX host a test run may use.
+  it('encodes a separator-terminated drive root as the hosting platform resolves it', async () => {
+    const run = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
+    await openNativePath('C:\\', signal(), { platform: 'win32', run })
+    expect(run).toHaveBeenCalledExactlyOnceWith(
+      'explorer.exe',
+      [process.platform === 'win32' ? 'file:///C:/' : 'file:///C://'],
+      expect.any(AbortSignal),
+    )
+  })
+
+  it('encodes a directory target the same way it encodes a file target', async () => {
+    const run = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
+    await openNativeAssociatedPath('C:\\work\\dir,comma', signal(), { platform: 'win32', run })
     expect(run).toHaveBeenCalledWith(
-      'powershell.exe',
-      ['-NoProfile', '-Command', "Invoke-Item -LiteralPath 'C:\\work\\o''reilly.txt'"],
+      'explorer.exe',
+      ['file:///C:/work/dir%2Ccomma'],
       expect.any(AbortSignal),
     )
   })
@@ -102,8 +137,8 @@ describe('native path opener', () => {
     const run = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
     await openNativeTextFile('C:\\work\\settings.yaml', signal(), { platform: 'win32', run })
     expect(run).toHaveBeenCalledWith(
-      'powershell.exe',
-      ['-NoProfile', '-Command', "Invoke-Item -LiteralPath 'C:\\work\\settings.yaml'"],
+      'explorer.exe',
+      ['file:///C:/work/settings.yaml'],
       expect.any(AbortSignal),
     )
   })
@@ -128,7 +163,7 @@ describe('native path opener', () => {
       osRelease: '6.8.0-generic', env: {}, run,
     })
     const expected = process.platform === 'win32'
-      ? 'powershell.exe'
+      ? 'explorer.exe'
       : process.platform === 'linux'
         ? 'xdg-open'
         : 'open'
@@ -260,7 +295,7 @@ describe('browser-renderable documents', () => {
       platform: 'win32',
       run: async (command, args) => { win.push([command, ...args]); return { stdout: '', stderr: '' } },
     })
-    expect(win[0]?.[0]).toBe('powershell.exe')
+    expect(win[0]?.[0]).toBe('explorer.exe')
   })
 
   it('hands browser-renderable WSL paths to the Windows desktop', async () => {
@@ -279,12 +314,7 @@ describe('browser-renderable documents', () => {
     })
     expect(calls).toEqual([
       ['wslpath', '-w', '/home/test/page.html'],
-      [
-        'powershell.exe',
-        '-NoProfile',
-        '-Command',
-        "Invoke-Item -LiteralPath 'C:\\workspace\\page.html'",
-      ],
+      ['explorer.exe', 'file:///C:/workspace/page.html'],
     ])
   })
 })
@@ -331,7 +361,7 @@ describe('canOpenNativePath', () => {
 describe('native file manager', () => {
   it.each([
     ['darwin', 'finder', '/tmp/my report.txt', 'open', ['-R', '/tmp/my report.txt'], undefined],
-    ['win32', 'explorer', 'C:\\work\\my report.txt', 'explorer.exe', ['/select,', 'C:\\work\\my report.txt'], { windowsHide: false }],
+    ['win32', 'explorer', 'C:\\work\\my report.txt', 'explorer.exe', ['/select,', 'file:///C:/work/my%20report.txt'], { windowsHide: false }],
     ['linux', 'directory', '/tmp/a $b; report.txt', 'xdg-open', ['/tmp'], undefined],
   ] as const)('reveals through %s without opening the file association', async (platform, manager, path, command, args, expectedOpts) => {
     const run = vi.fn<PathOpenerRunner>(async () => ({ stdout: '', stderr: '' }))
@@ -352,7 +382,7 @@ describe('native file manager', () => {
     await revealNativePath('/mnt/c/work/报告.txt', signal(), internals)
     expect(run.mock.calls.map(([cmd, args, _sig, opts]) => [cmd, args, opts])).toEqual([
       ['wslpath', ['-w', '/mnt/c/work/报告.txt'], undefined],
-      ['explorer.exe', ['/select,', 'C:\\work\\报告.txt'], { windowsHide: false }],
+      ['explorer.exe', ['/select,', 'file:///C:/work/报告.txt'], { windowsHide: false }],
     ])
   })
 
@@ -383,7 +413,7 @@ it('uses the native runner for a file-manager handoff with windowsHide false for
   await revealNativePath('C:\\work\\report.txt', signal(), { platform: 'win32' })
   expect(execFileMock).toHaveBeenCalledWith(
     'explorer.exe',
-    ['/select,', 'C:\\work\\report.txt'],
+    ['/select,', 'file:///C:/work/report.txt'],
     expect.objectContaining({ encoding: 'utf8', windowsHide: false }),
     expect.any(Function),
   )
@@ -415,9 +445,27 @@ it('preserves cancellation even when Explorer returns delegate exit 1', async ()
   await expect(revealNativePath('C:\\file.txt', abort.signal, { platform: 'win32', run })).rejects.toBe(reason)
 })
 
+it.each(['win32', 'linux'] as const)('accepts the Explorer delegate exit 1 when opening on %s', async (platform) => {
+  // The settings sheet's open gesture must survive the same handoff reveal does.
+  const run = vi.fn<PathOpenerRunner>(async (command) => {
+    if (command === 'wslpath') return { stdout: 'C:\\work\\settings.yaml', stderr: '' }
+    throw Object.assign(new Error('delegated'), { code: 1 })
+  })
+  await expect(openNativePath(
+    platform === 'win32' ? 'C:\\work\\settings.yaml' : '/mnt/c/work/settings.yaml', signal(),
+    { platform, env: { WSL_DISTRO_NAME: 'Ubuntu' }, run },
+  )).resolves.toBeUndefined()
+})
+
+it('preserves a non-delegate Explorer failure when opening', async () => {
+  const failure = Object.assign(new Error('launch failed'), { code: 2 })
+  const run = vi.fn<PathOpenerRunner>().mockRejectedValue(failure)
+  await expect(openNativePath('C:\\file.txt', signal(), { platform: 'win32', run })).rejects.toBe(failure)
+})
+
 it.each([
-  ['C:\\my files\\报告,#%.txt', 'C:\\my files\\报告,#%.txt'],
-  ['\\\\server\\share\\a,b.txt', '\\\\server\\share\\a,b.txt'],
+  ['C:\\my files\\报告,#%.txt', 'file:///C:/my%20files/报告%2C%23%25.txt'],
+  ['\\\\server\\share\\a,b.txt', 'file://server/share/a%2Cb.txt'],
 ])('preserves special characters in the Explorer target %s', async (path, target) => {
   const run = vi.fn<PathOpenerRunner>().mockResolvedValue({ stdout: '', stderr: '' })
   await revealNativePath(path, signal(), { platform: 'win32', run })
@@ -429,7 +477,7 @@ it('passes /select, and path as separate arguments with windowsHide false for Ex
   await revealNativePath('C:\\Program Files\\app\\config.json', signal(), { platform: 'win32', run })
   expect(run).toHaveBeenCalledWith(
     'explorer.exe',
-    ['/select,', 'C:\\Program Files\\app\\config.json'],
+    ['/select,', 'file:///C:/Program%20Files/app/config.json'],
     expect.any(AbortSignal),
     { windowsHide: false },
   )

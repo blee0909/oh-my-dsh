@@ -7,8 +7,8 @@ DSH 会把自身的出站请求——模型调用、web 搜索、页面抓取、
 ## 导出环境变量
 
 ```sh
-export HTTPS_PROXY=http://127.0.0.1:7890
-export HTTP_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY=http://127.0.0.1:10810
+export HTTP_PROXY=http://127.0.0.1:10810
 ```
 
 把这两行写进 shell 配置，这样每次调用 `dsh` 都会继承它们；也可以写进 `$DSH_HOME/.env`（默认 `~/.dsh/.env`），和 API key 放在一起；导出的环境变量始终优先于该文件。项目自己的 `.env` 不能设置它们：它随 `git clone` 一起到来，DSH 宁可拒绝启动，也不让一个仓库决定你的流量去向。

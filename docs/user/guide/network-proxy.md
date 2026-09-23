@@ -7,8 +7,8 @@ DSH routes its outbound requests — model calls, web search, page fetches, and 
 ## Export the variables
 
 ```sh
-export HTTPS_PROXY=http://127.0.0.1:7890
-export HTTP_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY=http://127.0.0.1:10810
+export HTTP_PROXY=http://127.0.0.1:10810
 ```
 
 Put both lines in your shell profile so every `dsh` invocation inherits them, or in `$DSH_HOME/.env` (`~/.dsh/.env` by default) next to your API key; an exported variable always wins over that file. A project's own `.env` cannot set them: it arrives with `git clone`, and DSH refuses to start rather than let a repository decide where your traffic goes.

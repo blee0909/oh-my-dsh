@@ -20,6 +20,13 @@ import { createLaunchEnvironmentSnapshot, type LaunchEnvironmentSnapshot } from 
 import { createPluginQuarantine, type PluginQuarantine } from './quarantine.ts'
 export { readProfilePatches, resolveTelemetryPatch, type ProfileContext, type ProfilePnpmInvocation } from './profile-context.ts'
 export { sanitizeProfile } from './profile-sanitize.ts'
+export { getDshRuntimeVersion, evaluatePluginCompatibility, pluginCompatibilityWarning, type PluginCompatibility } from './plugin-compatibility.ts'
+export {
+  PROFILE_COMPATIBILITY_FILENAME, readProfileCompatibility, readProfileVersionExemptions,
+  setProfileVersionExemption, type ProfileCompatibility,
+} from './profile-compatibility.ts'
+import { prepareProfilePatches } from './compatibility-preflight.ts'
+export { prepareProfileEntries, prepareProfilePatches } from './compatibility-preflight.ts'
 export { readPluginMeta } from './package-meta.ts'
 export { generateConfigSchema, type ConfigSchemaDump, type NativeConfigSchema } from './config-schema/index.ts'
 export { createConfigProjector, LOADER_EXPRESSION_SCHEMA, type ConfigProjection } from './config-schema/projector.ts'
@@ -292,7 +299,10 @@ export async function reconcileProfilePatches(
     fiber: row.fiber, failed: row.fiber.state === FIBER_FAILED || row.fiber.state === FIBER_DISPOSED,
   }])
   const { patches: _previous, ...includeConfig } = entry.options.config as Include.Config
-  await entry.update({ config: { ...includeConfig, patches } })
+  // The recomposition judges the rows the launch judged, resolved from the file this Include read.
+  const parentURL = new URL('.', new URL(includeConfig.path, entry.parent.tree.ctx.baseUrl)).href
+  const prepared = prepareProfilePatches(ctx, patches, parentURL, binName)
+  await entry.update({ config: { ...includeConfig, patches: prepared } })
   const results = await Promise.allSettled(previousFibers.map(({ fiber }) => fiber.await()))
   await ctx.loader.await()
   const failures = await inactiveEntries(ctx)
@@ -402,14 +412,15 @@ export interface ConfigDumpLayer {
 }
 
 /**
- * Compose the effective entry list exactly as `boot()` would mount it: parse
- * the base config file with the include's entry-list dialect, apply every
- * layer's patches as ONE flattened list through the include's own patch
- * algorithm (`applyEntryPatches`) — the same single call `boot()` makes, so
- * even patch-visibility corner cases (a later layer targeting a group child a
- * plain config replacement introduced, which the single-pass id index never
- * sees) compose identically — then render the result as YAML in the same
- * dialect (`!!js` expressions print verbatim, unevaluated).
+ * Compose the configured entry list: parse the base config file with the
+ * include's entry-list dialect, apply every layer's patches as ONE flattened
+ * list through the include's own patch algorithm (`applyEntryPatches`) — the
+ * same call `boot()` makes, so even patch-visibility corner cases (a later
+ * layer targeting a group child a plain config replacement introduced, which
+ * the single-pass id index never sees) compose identically — then render the
+ * result as YAML in the same dialect (`!!js` expressions print verbatim,
+ * unevaluated). Row admission is a later stage: a plugin row the compatibility
+ * policy denies still appears here, while a denied bundle contributes no layer.
  *
  * Every run of rows from the same file and patch layers is preceded by a `# ==` comment
  * naming the file that contributed the rows and any layers that patched them,
@@ -632,6 +643,7 @@ class SafeModeEntryGroup extends EntryGroup {
  * names; relative names continue to resolve beside the configuration file.
  * @param quarantine - optional plugin quarantine service for safe-mode boot.
  * @param essentialEntries - optional set of entry IDs or names that must never be quarantined.
+ * @param binName - diagnostic prefix for a profile plugin denied by compatibility policy; defaults to `dsh`.
  * @returns the created root Include entry, or `undefined` when a surface
  * disposed the whole tree (taking the Loader service with it) while the
  * entry creation was in flight.
@@ -641,9 +653,12 @@ export async function mountRootInclude(
   absoluteConfigPath: string,
   patches: readonly PatchOptions[] = [],
   bareModuleBaseUrl?: string,
-  quarantine?: PluginQuarantine,
+  quarantineOrBinName?: PluginQuarantine | string,
   essentialEntries?: ReadonlySet<string>,
+  binName = 'dsh',
 ): Promise<Entry | undefined> {
+  const quarantine = typeof quarantineOrBinName === 'object' && quarantineOrBinName !== null ? quarantineOrBinName : undefined
+  const resolvedBinName = typeof quarantineOrBinName === 'string' ? quarantineOrBinName : binName
   class HostResolvedRootInclude extends Include {
     override import(name: string, getOuterStack?: () => string[]): unknown {
       const specifier = isAbsolute(name) ? pathToFileURL(name).href : name
@@ -678,10 +693,13 @@ export async function mountRootInclude(
   // Pinned id: the bootstrap include is app glue, not a config row, and its
   // id appears in Loader failure chains — a random id would make startup
   // diagnostics unstable across runs (and snapshot fixtures).
+  // The launcher's own copy is prepared here: compatibility decisions must be made before the root
+  // Include imports anything, and they change no profile patch layer, manifest, or bundle list.
+  const prepared = prepareProfilePatches(ctx, [...patches], pathToFileURL(dirname(absoluteConfigPath)).href + '/', resolvedBinName)
   const includeConfig: Include.Config = {
     path: pathToFileURL(absoluteConfigPath).href,
     tolerateEntryFailures: true,
-    ...patches.length > 0 ? { patches: [...patches] } : {},
+    ...prepared.length > 0 ? { patches: prepared } : {},
   }
   const rootInclude: EntryOptions = {
     id: 'include',
@@ -1255,7 +1273,7 @@ export async function boot(
     await ctx.plugin(Loader)
     await prepare?.(ctx)
     stage = 'plugin tree failed to load'
-    await mountRootInclude(ctx, absoluteConfigPath, patches, bareModuleBaseUrl, quarantine, essentialSet)
+    await mountRootInclude(ctx, absoluteConfigPath, patches, bareModuleBaseUrl, quarantine, essentialSet, binName)
     // A surface can finish and dispose the whole tree while startup is still
     // in flight, before the last entry settles. The Loader service goes with
     // it, and the activation audit describes a live tree — reading `ctx.loader`

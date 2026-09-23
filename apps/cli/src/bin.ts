@@ -6,10 +6,10 @@
 
 /* v8 ignore file -- built-bin acceptance exercises this self-executing dispatch. */
 
-import { readFileSync, realpathSync } from 'node:fs'
+import { realpathSync } from 'node:fs'
 import { resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadLayeredEnv, StartupError } from '@deepseek-ai/dsh-app-boot'
+import { getDshRuntimeVersion, loadLayeredEnv, StartupError } from '@deepseek-ai/dsh-app-boot'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
 import { parseDshArgs } from './args.ts'
 import { reportStartupFailure } from './startup-diagnostics.ts'
@@ -38,22 +38,12 @@ export function isMainModule(metaUrl: string, entry: string | undefined = proces
   }
 }
 
-// Both the source tree (apps/cli/src) and the bundled bin (apps/cli/lib) sit
-// one directory under apps/cli, so the checked-in manifest resolves with the
-// same relative hop from either artifact.
-function readVersion(): string {
-  const manifest = JSON.parse(
-    readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
-  ) as { version?: unknown }
-  return typeof manifest.version === 'string' ? manifest.version : '0.0.0'
-}
-
 /**
  * Run the public dsh command-line interface.
  * @returns a promise that settles when the selected command mode finishes.
  */
 export async function runCli(): Promise<void> {
-  const version = readVersion()
+  const version = getDshRuntimeVersion()
   const invocation = parseDshArgs(process.argv.slice(2), version)
 
   switch (invocation.mode) {

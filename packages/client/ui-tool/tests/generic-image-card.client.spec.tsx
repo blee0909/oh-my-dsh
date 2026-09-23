@@ -116,6 +116,7 @@ describe('GenericToolCard image rendering (Discussions #6475)', () => {
       <GenericToolCard
         callId="c1"
         toolName="show_image"
+        phase="result"
         block={textNode}
         openFile={vi.fn()}
         loadImage={loadImage}
@@ -149,6 +150,7 @@ describe('GenericToolCard image rendering (Discussions #6475)', () => {
       <GenericToolCard
         callId="c1"
         toolName="show_image"
+        phase="result"
         block={multiImageResult}
         openFile={vi.fn()}
         loadImage={loadImage}
@@ -178,6 +180,7 @@ describe('GenericToolCard image rendering (Discussions #6475)', () => {
       <GenericToolCard
         callId="c1"
         toolName="show_image"
+        phase="result"
         block={node}
         openFile={vi.fn()}
         loadImage={loadImage}

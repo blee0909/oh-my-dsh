@@ -43,6 +43,7 @@ interface BlockLike {
   interrupted?: unknown
   status?: unknown
   kind?: unknown
+  phase?: unknown
   subCalls?: unknown[]
 }
 
@@ -68,6 +69,7 @@ export function ApprovalCommand({ callId, useChat }: PropsRuntime<'conversation.
     const scanBlock = (block: unknown): string | undefined => {
       if (!block || typeof block !== 'object') return undefined
       const b = block as BlockLike
+      if (b.phase === 'preparing') return undefined
       const isInterrupted = b.error?.code === 'interrupted' || b.interrupted === true || b.status === 'interrupted'
       const isPendingOrInterrupted = !('kind' in b) || isInterrupted
       if (isPendingOrInterrupted && (b.callId === callId || b.call?.callId === callId)) {
@@ -95,5 +97,6 @@ export function ApprovalCommand({ callId, useChat }: PropsRuntime<'conversation.
     }
     return undefined
   })
-  return command ?? null
+
+  return command !== undefined && command.trim().length > 0 ? <code>{command}</code> : null
 }

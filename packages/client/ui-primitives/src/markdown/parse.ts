@@ -11,6 +11,7 @@
  */
 
 import type { Root, RootContent } from 'mdast'
+import { recoverLocalImages } from './local-image-syntax.ts'
 import { fromMarkdown } from 'mdast-util-from-markdown'
 import { gfmFromMarkdown } from 'mdast-util-gfm'
 import { mathFromMarkdown } from 'mdast-util-math'
@@ -25,10 +26,10 @@ import { mathCompatibility } from './mathCompatibility.ts'
  * @returns The mdast root.
  */
 export function parseGfm(text: string): Root {
-  return fromMarkdown(text, {
+  return recoverLocalImages(fromMarkdown(text, {
     extensions: [gfm({ singleTilde: false }), cjkFriendlyStrong()],
     mdastExtensions: [gfmFromMarkdown()],
-  })
+  }), text)
 }
 
 /**
@@ -43,11 +44,11 @@ export function parseGfmWithMath(text: string): Root {
     mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown()],
   })
   const fallbackOffsets = findUnclosedMathOffsets(root, text)
-  if (fallbackOffsets.size === 0) return root
-  return fromMarkdown(text, {
+  if (fallbackOffsets.size === 0) return recoverLocalImages(root, text)
+  return recoverLocalImages(fromMarkdown(text, {
     extensions: [gfm({ singleTilde: false }), cjkFriendlyStrong(), mathCompatibility({ fallbackOffsets })],
     mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown()],
-  })
+  }), text)
 }
 
 /**
