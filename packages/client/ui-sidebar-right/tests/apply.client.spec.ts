@@ -32,6 +32,7 @@ const SESSION = 's-test' as SessionId
 
 interface Recorded {
   name: string
+  id?: string
   key?: string
   locale?: string
   store?: unknown
@@ -115,6 +116,7 @@ describe('ui-sidebar-right apply', () => {
     // Both seats read one store: the button only needs to know whether the panel is expanded.
     expect(seat('rightbar.session').store).toBeDefined()
     expect(seat('conversation.session.header.corner').store).toBe(seat('rightbar.session').store)
+    expect(seat('rightbar').id).toBe('sidebar-right')
   })
 
   it('hands the panel seat the frame report, the service binding, the opens, the observable registry, and the Tab domain', async () => {
@@ -261,5 +263,43 @@ describe('ui-sidebar-right apply', () => {
     await ctx.plugin({ inject: [...inject], apply }).await()
     expect(ctx.sidebarRightTabs.get('guide')?.id).toBe(GUIDE_ID)
     expect(registered).toHaveLength(5)
+  })
+
+  it('registers into rightbar when rightbar seat is declared as list without throwing missing id (Discussions #7347)', async () => {
+    const { SlotCore } = await import('@deepseek-ai/dsh-client-ui-slots')
+    const ctx = new Context()
+    const core = new SlotCore()
+    core.register({
+      name: 'root',
+      children: {
+        'rightbar': { kind: 'list', scope: 'root' },
+        'conversation.session.header.corner': { kind: 'single', scope: 'session' },
+      },
+    } as never, (() => null) as never)
+
+    const slots = {
+      inject: vi.fn((_name: string, register: Parameters<SlotRegistry['inject']>[1]) => ctx.effect(register)),
+      register: vi.fn((opts: Omit<Recorded, 'component'>, comp: unknown) => core.register(opts as never, comp as never)),
+    }
+    const dictionaries = new Map<string, unknown>()
+    const locale = {
+      bind: vi.fn(() => (key: string) => key),
+      register: vi.fn((ns: string, dicts: unknown) => {
+        dictionaries.set(ns, dicts)
+        return () => { dictionaries.delete(ns) }
+      }),
+    }
+    const layout = { openRightbar: vi.fn(), closeRightbar: vi.fn() }
+    const resources = { pin: vi.fn() }
+    ctx.provide('slots', slots as never)
+    ctx.provide('locale', locale as never)
+    ctx.provide('layout', layout as never)
+    ctx.provide('resources', resources as never)
+    ctx.provide('sessions', { retain: vi.fn() } as never)
+    ctx.provide('uiSession', { adapter: { current: createSnapshotStore({ key: undefined }) } } as never)
+    const fiber = ctx.plugin({ inject: [...inject], apply })
+    await fiber.await()
+    expect(core.entries('rightbar')[0]?.options.id).toBe('sidebar-right')
+    await fiber.dispose()
   })
 })

@@ -164,6 +164,7 @@ export function apply(ctx: ClientContext): void {
     const disposeSeat = ctx.slots.inject('rightbar', function* () {
       yield ctx.slots.register({
         name: 'rightbar',
+        id: 'sidebar-right',
         children: { 'rightbar.session': { kind: 'single', scope: 'session' } },
         inject: (): RightbarRootInjected => ({
           hooks: { views: views.source },

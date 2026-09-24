@@ -785,6 +785,8 @@ export type KindOptions<
         priority?: number
       }
         : {
+          /** Entry identifier, optional for single seats but recorded when supplied. */
+          id?: string
           /**
            * Cell shadowing rank (ascending, default 0, lowest renders; a
            * same-priority second registration throws — see {@link SlotCore.register}).

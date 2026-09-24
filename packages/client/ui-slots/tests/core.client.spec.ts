@@ -145,6 +145,13 @@ describe('lifecycle cascade (one axis)', () => {
 })
 
 describe('kind semantics', () => {
+  it('single: accepts optional id and preserves it on stored entry', () => {
+    const core = new SlotCore()
+    mountFrame(core)
+    core.register({ name: 'test.single', id: 'my-single-id' }, Comp)
+    expect(core.entries('test.single')[0]?.options.id).toBe('my-single-id')
+  })
+
   it('keyed: duplicate key throws, missing key throws', () => {
     const core = new SlotCore()
     mountFrame(core)
