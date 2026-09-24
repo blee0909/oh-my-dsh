@@ -18,6 +18,7 @@ import type {
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRegistry from '@deepseek-ai/dsh-tools'
 import * as ToolPwshPersistent from '@deepseek-ai/dsh-tool-pwsh-persistent'
+import { PWSH_PROMPT_SETUP } from '@deepseek-ai/dsh-terminal-bash'
 import { unsupportedInbox } from '@deepseek-ai/dsh-agent-loop-testkit'
 
 const contexts: Context[] = []
@@ -765,5 +766,9 @@ describe('tool-pwsh-persistent', () => {
     expect(() => {
       ToolPwshPersistent.apply(new Context(), { description: ' ' })
     }).toThrow('description must be non-empty')
+  })
+
+  it('verifies terminal backend disables PSReadLine history saving (Discussions #7319)', () => {
+    expect(PWSH_PROMPT_SETUP).toContain('Set-PSReadLineOption -HistorySaveStyle SaveNothing')
   })
 })

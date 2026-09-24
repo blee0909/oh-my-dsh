@@ -453,6 +453,7 @@ describe('BashTerminalBackend startup rollback', () => {
     })
     expect(spawned?.env?.PS1).toBeUndefined()
     expect(spawned?.env?.PROMPT_COMMAND).toBeUndefined()
+    expect(PWSH_PROMPT_SETUP).toContain('Set-PSReadLineOption -HistorySaveStyle SaveNothing')
   })
 
   it('keeps waiting for stdin_read when the first settled output only echoes the prompt literal', async () => {

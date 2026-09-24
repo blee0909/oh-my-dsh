@@ -93,9 +93,13 @@ function childEnvironment(spec: TerminalBackendSpawnSpec, dialect: ShellDialect)
  * before every prompt, mirroring bash's PROMPT_COMMAND. `[char]27`/`[char]7`
  * build the control bytes at runtime because raw ESC characters in submitted
  * input are unreliable under PSReadLine.
+ * Disabling PSReadLine history saving (`-HistorySaveStyle SaveNothing`) prevents
+ * model-driven wrapper commands from polluting the user's global ConsoleHost_history.txt (Discussions #7319).
  */
 export const PWSH_PROMPT_SETUP =
-  "function prompt { [Console]::Write([char]27 + ']133;D;' + [int]$LASTEXITCODE + [char]7); '" + CONTROLLED_PROMPT + "' }"
+  "function prompt { [Console]::Write([char]27 + ']133;D;' + [int]$LASTEXITCODE + [char]7); '" +
+  CONTROLLED_PROMPT +
+  "' }; try { Set-PSReadLineOption -HistorySaveStyle SaveNothing } catch {}"
 
 async function spawnArgv(ctx: Context, config: ResolvedConfig, policy: SandboxExecutionPolicy, signal?: AbortSignal): Promise<string[]> {
   const argv = [config.shellPath, ...config.shellArgs]
