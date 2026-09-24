@@ -621,4 +621,32 @@ describe('Session MCP Loader composition', () => {
     expect((await execute(ctx, existing.agent)).isError).toBe(true)
     expect((await execute(ctx, future.agent)).isError).toBe(false)
   })
+
+  it('does not fail Session activation when blocked-client tool mask restrict throws (Discussions #7286)', async () => {
+    const { ctx } = await load(true)
+    const first = await ctx.agents.create({ sessionId: SessionId('first-owner') })
+    await warm(ctx, first.agent)
+
+    const toolsProto = Object.getPrototypeOf(ctx.get('tools') as object) as { restrict: (_filter: unknown) => () => void }
+    const origRestrict = toolsProto.restrict
+    let restrictCalls = 0
+    toolsProto.restrict = function (_filter: unknown) {
+      restrictCalls++
+      throw new Error('tools.restrict() requires a scoped context (agent.ctx): a context-global restriction would mask every agent — deny the tool for the intended agent instead')
+    }
+
+    try {
+      const child = await ctx.agents.create({
+        sessionId: SessionId('blocked-child'),
+        parentAgent: first.agent,
+        setup: (_inner, agent) => { bindScopeParent(agent, first.agent) },
+      })
+      expect(child.agent).toBeDefined()
+      expect(restrictCalls).toBeGreaterThanOrEqual(1)
+      await child.dispose()
+    } finally {
+      toolsProto.restrict = origRestrict
+      await first.dispose()
+    }
+  })
 })

@@ -5,7 +5,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import Schema from '@deepseek-ai/schemastery'
 import { BrowserUseProviderName } from '@deepseek-ai/dsh-browser-use/brand'
 import * as McpClient from '@deepseek-ai/dsh-mcp-client'
-import { createScope } from '@deepseek-ai/dsh-scope'
+import { createScope, scopeOf } from '@deepseek-ai/dsh-scope'
 import type { Scope } from '@deepseek-ai/dsh-scope'
 import { SessionResources } from './index.ts'
 import type {} from '@deepseek-ai/dsh-browser-use'
@@ -94,6 +94,13 @@ interface ClientState {
 }
 
 /**
+ * Blocked-client mask retries per Agent once its creation window has passed.
+ * The mask is best effort: when the minted scope is not yet usable the failure
+ * must stay local to the mask instead of failing Session activation.
+ */
+const MASK_RETRY_LIMIT = 3
+
+/**
  * Await one MCP client during each future Agent's creation.
  * A busy attachment leaves that activation without browser tools; its other turns continue.
  * Calls are serialized per Session; unload closes every server before releasing registration.
@@ -103,6 +110,7 @@ interface ClientState {
 export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void {
   let resources!: SessionResources<Scope>
   const clients = new Map<Agent, ClientState>()
+  const maskRetries = new WeakMap<Agent, number>()
   const toolPrefix = `mcp__${options.name}__`
   const resourceTools = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'])
   let stopping = false
@@ -116,8 +124,20 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
         if (state.status !== 'blocked') continue
         const inherited = ctx.tools.schemas(agent).filter(tool => tool.name.startsWith(toolPrefix))
         if (inherited.length === 0) continue
-        state.mask ??= createScope(ctx, agent)
-        state.mask.ctx.tools.restrict({ deny: inherited.map(tool => tool.name) })
+        const mask = state.mask ??= createScope(ctx, agent)
+        if (scopeOf(mask.ctx) === undefined) {
+          delete state.mask
+          const retries = (maskRetries.get(agent) ?? 0) + 1
+          maskRetries.set(agent, retries)
+          void mask.dispose()
+          if (retries <= MASK_RETRY_LIMIT) setTimeout(refreshBlockedMasks, 0)
+          continue
+        }
+        try {
+          mask.ctx.tools.restrict({ deny: inherited.map(tool => tool.name) })
+        } catch (error: unknown) {
+          ctx.logger?.warn?.(`${options.name}: blocked-client tool mask failed: %s`, error)
+        }
       }
     } finally {
       refreshingMasks = false
@@ -181,6 +201,7 @@ export function mountSessionMcp(ctx: Context, options: SessionMcpOptions): void 
     const state: ClientState = { status: resources.available(agent) ? 'ready' : 'blocked' }
     agent.ctx.effect(() => async () => {
       clients.delete(agent)
+      maskRetries.delete(agent)
       await state.mask?.dispose()
     }, `${options.name}.activation`)
     if (state.status === 'blocked') {
