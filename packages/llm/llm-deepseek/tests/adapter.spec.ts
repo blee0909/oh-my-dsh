@@ -534,3 +534,33 @@ it.each([
   await assemble(ctx.llm.stream(options()))
   expect(request).toHaveBeenCalledOnce()
 })
+
+it('heals dangling tool calls in history without throwing INVALID_REQUEST (Discussions #7257, #7386)', async () => {
+  vi.stubEnv('DEEPSEEK_API_KEY', 'ambient-key')
+  const { ctx } = await context()
+  await ctx.plugin(LlmRuntime)
+  await ctx.plugin(Messages, { baseURL: 'https://api.deepseek.com' })
+  const request = vi.fn<typeof fetch>((_input, init) => {
+    const body = JSON.parse(init?.body as string) as { messages: Array<{ role: string; content: Array<Record<string, unknown>> }> }
+    const userTurn = body.messages.find(m => m.role === 'user' && m.content.some(b => b.type === 'tool_result'))
+    expect(userTurn).toBeDefined()
+    const resultBlock = userTurn?.content.find(b => b.type === 'tool_result' && b.tool_use_id === 'call_1')
+    expect(resultBlock).toBeDefined()
+    expect(resultBlock?.is_error).toBe(true)
+    return Promise.resolve(new Response(sse(textEvents), { status: 200 }))
+  })
+  vi.stubGlobal('fetch', request)
+  const historyWithDangling: Message[] = [
+    createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'hi' }] }),
+    createAssistantMessage({
+      source: { provider: 'deepseek-official', model: MODEL },
+      content: [
+        { type: 'text', text: 'calling tool' },
+        { type: 'tool-call', id: 'call_1' as ToolCallId, name: 'grep', arguments: '{}' },
+      ],
+    }),
+    createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'next question' }] }),
+  ]
+  await assemble(ctx.llm.stream(options({ messages: historyWithDangling })))
+  expect(request).toHaveBeenCalledOnce()
+})

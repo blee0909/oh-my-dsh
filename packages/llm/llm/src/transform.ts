@@ -42,9 +42,10 @@ export const TAIL_CHARS = 12_800
 /** Extract text content recursively from a sequence of content blocks. */
 function extractTextFromBlocks(blocks: readonly unknown[]): string {
   return blocks
-    .map((b: any) => {
-      if (b?.type === 'text') return b.text
-      if (b?.type === 'tool-result' && Array.isArray(b.content)) return extractTextFromBlocks(b.content)
+    .map((b) => {
+      const block = b as Record<string, unknown> | undefined
+      if (block?.type === 'text' && typeof block.text === 'string') return block.text
+      if (block?.type === 'tool-result' && Array.isArray(block.content)) return extractTextFromBlocks(block.content)
       return ''
     })
     .filter(Boolean)
@@ -65,7 +66,8 @@ function sanitizeToolResultBlocks(blocks: readonly unknown[]): { blocks: Content
   let changed = false
   const sanitized: ContentBlock[] = []
 
-  for (const block of (blocks as any[])) {
+  for (const item of blocks) {
+    const block = item as Record<string, unknown> | undefined
     if (block?.type === 'text' && typeof block.text === 'string' && block.text.length > MAX_TOOL_OUTPUT_CHARS) {
       changed = true
       sanitized.push({
@@ -77,14 +79,14 @@ function sanitizeToolResultBlocks(blocks: readonly unknown[]): { blocks: Content
       if (nested.modified) {
         changed = true
         sanitized.push({
-          ...block,
+          ...(block as unknown as Record<string, unknown>),
           content: nested.blocks,
-        })
+        } as unknown as ContentBlock)
       } else {
-        sanitized.push(block)
+        sanitized.push(item as ContentBlock)
       }
-    } else {
-      sanitized.push(block)
+    } else if (item) {
+      sanitized.push(item as ContentBlock)
     }
   }
 
@@ -171,13 +173,13 @@ export function transformMessages(
 
     // 1. User messages (can carry tool results, commentary text, or fresh prompts)
     if (msg.role === 'user') {
-      const toolResults = (msg.content as any[]).filter(b => b?.type === 'tool-result')
+      const toolResults = (msg.content as unknown as readonly Record<string, unknown>[]).filter(b => b?.type === 'tool-result')
       const textBlocks = msg.content.filter(b => b.type === 'text')
 
       // Mark which pending tool calls are successfully satisfied by this user turn
       for (const res of toolResults) {
         if (typeof res?.toolCallId === 'string') {
-          pendingToolCalls.delete(res.toolCallId)
+          pendingToolCalls.delete(res.toolCallId as ToolCallId)
         }
       }
 
@@ -191,34 +193,36 @@ export function transformMessages(
       let userTurnModified = false
       const sanitizedContent: ContentBlock[] = []
 
-      for (const block of (msg.content as any[])) {
+      for (const item of msg.content) {
+        const block = item as unknown as Record<string, unknown> | undefined
         if (block?.type === 'tool-result') {
-          if (!knownToolCalls.has(block.toolCallId)) {
+          const callId = block.toolCallId as ToolCallId
+          if (!knownToolCalls.has(callId)) {
             // Reverse-orphan tool-result: downgrade to text representation
             userTurnModified = true
             modified = true
-            const rawText = extractTextFromBlocks(block.content)
+            const rawText = extractTextFromBlocks(Array.isArray(block.content) ? block.content : [])
             const safeText = truncateTextUnderBudget(rawText)
             sanitizedContent.push({
               type: 'text',
-              text: `[Historical Tool Result for ${block.toolCallId}]: ${safeText || '(no output)'}`,
+              text: `[Historical Tool Result for ${String(callId)}]: ${safeText || '(no output)'}`,
             })
           } else {
             // Valid tool-result: apply bounded budget truncation
-            const sanitized = sanitizeToolResultBlocks(block.content)
+            const sanitized = sanitizeToolResultBlocks(Array.isArray(block.content) ? block.content : [])
             if (sanitized.modified) {
               userTurnModified = true
               modified = true
               sanitizedContent.push({
-                ...block,
+                ...(item as unknown as Record<string, unknown>),
                 content: sanitized.blocks,
-              })
+              } as unknown as ContentBlock)
             } else {
-              sanitizedContent.push(block)
+              sanitizedContent.push(item)
             }
           }
         } else {
-          sanitizedContent.push(block)
+          sanitizedContent.push(item)
         }
       }
 
@@ -300,7 +304,8 @@ export function transformMessages(
 
     // 3. Tool result messages (role === 'tool', upstream v0.1.7)
     if (msg.role === 'tool') {
-      const toolCallId = (msg as any).toolCallId ?? (msg as any).source?.callId
+      const src = msg.source as unknown as Record<string, unknown> | undefined
+      const toolCallId = msg.toolCallId ?? src?.callId
       if (typeof toolCallId === 'string') {
         pendingToolCalls.delete(toolCallId as ToolCallId)
       }
@@ -327,13 +332,26 @@ export function transformMessages(
   // Final Guard: If conversation ends with unclosed tool-calls, flush them
   flushPendingToolCalls()
 
+  function canCoalesce(prev?: Message, curr?: Message): boolean {
+    if (!prev || !curr) return false
+    if (prev.role !== curr.role || curr.role === 'tool') return false
+    const pSource = prev.source as Record<string, unknown> | undefined
+    const cSource = curr.source as Record<string, unknown> | undefined
+    const pKind = pSource?.kind
+    const cKind = cSource?.kind
+    if (pKind === 'plugin' || cKind === 'plugin') return false
+    if (pKind === 'runtime-context' || cKind === 'runtime-context') return false
+    // Only coalesce plain user conversational turns; preserve any specific or custom source kinds
+    if ((pKind !== undefined && pKind !== 'user') || (cKind !== undefined && cKind !== 'user')) return false
+    return true
+  }
+
   // 3. Turn Alternation Coalescer
-  // Check if adjacent same-role messages exist (skipping plugin boundaries to preserve prefix cache)
+  // Check if adjacent same-role messages exist (skipping plugin &
+  // distinct source boundaries to preserve semantic metadata and prefix cache)
   let needsCoalesce = false
   for (let i = 1; i < staged.length; i++) {
-    const curr = staged[i]
-    const prev = staged[i - 1]
-    if (curr && prev && curr.role === prev.role && curr.role !== 'tool' && (curr.source as any)?.kind !== 'plugin' && (prev.source as any)?.kind !== 'plugin') {
+    if (canCoalesce(staged[i - 1], staged[i])) {
       needsCoalesce = true
       break
     }
@@ -350,7 +368,7 @@ export function transformMessages(
 
   for (const msg of staged) {
     const prev = coalesced[coalesced.length - 1]
-    if (prev && prev.role === msg.role && msg.role !== 'tool' && (prev.source as any)?.kind !== 'plugin' && (msg.source as any)?.kind !== 'plugin') {
+    if (prev && canCoalesce(prev, msg)) {
       const mergedBlocks = coalesceBlocks(prev.content, msg.content)
       coalesced[coalesced.length - 1] = freezeMessage({
         ...prev,

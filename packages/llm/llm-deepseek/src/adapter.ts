@@ -1,7 +1,7 @@
 /** Direct Messages transport with one cancellable lifecycle per model request. */
 
-import { attributionHeaders, LlmAdapter, LlmError } from '@deepseek-ai/dsh-llm'
-import type { GenerateOptions, ImageAttachmentAccessResolver, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { attributionHeaders, LlmAdapter, LlmError, transformMessages } from '@deepseek-ai/dsh-llm'
+import type { GenerateOptions, ImageAttachmentAccessResolver, Message, PreparedAdapterCall, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { DeepSeekLlmApiJson } from '@deepseek-ai/dsh-deepseek-llm-api-extensions'
 import { idleWatchdog, timeoutOf } from '@deepseek-ai/dsh-timeout'
 import { catalogModelInfo, modelInfo } from './model-info.ts'
@@ -22,7 +22,8 @@ function isAttachmentError(error: unknown): error is { code: string; message: st
     error !== null &&
     'code' in error &&
     typeof (error as Record<string, unknown>).code === 'string' &&
-    (error as any).name === 'AttachmentError'
+    'name' in error &&
+    (error as Record<string, unknown>).name === 'AttachmentError'
   )
 }
 
@@ -94,8 +95,12 @@ export class DeepSeekAdapter extends LlmAdapter {
     options: GenerateOptions, connection: Connection, signal: AbortSignal, activity: () => void,
   ): AsyncGenerator<StreamChunk> {
     signal.throwIfAborted()
+    const inHistory = connection.models.find(m => m.id === options.model)?.systemPromptUpdate === 'in-history'
+    const normalizedMessages = transformMessages(options.messages as Message[], {
+      allowInHistorySystem: inHistory || options.purpose === 'compaction',
+    })
     const { messages, versions } = await prepareImages(
-      options.messages, connection, options.model, this.dependencies.resolveAttachments?.(), this.imageAccess, signal,
+      normalizedMessages, connection, options.model, this.dependencies.resolveAttachments?.(), this.imageAccess, signal,
     )
     const accountToken = await this.dependencies.resolveAccountToken?.(connection)
     const key = accountToken ?? await this.dependencies.resolveApiKey(connection)
