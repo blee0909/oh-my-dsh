@@ -1122,4 +1122,26 @@ describe('same-session goal driving', () => {
 
     expect(test.ctx.agents.get(handle.agent.id)).toBeUndefined()
   })
+
+  it('auto-resumes and drives the next round when an edit increases maxGoalRounds on a round-limited goal', async () => {
+    const test = await harness([textResponse('round one'), textResponse('round two')])
+    test.ctx.goals.create(test.agent, { objective: 'expand round limit', maxGoalRounds: 1 })
+
+    // 1. Wait for round 1 to complete and block on round-limit
+    let goal = await waitForGoal(test.ctx, test.agent, current => current?.phase === 'blocked')
+    expect(goal?.blockedReason?.code).toBe('round-limit')
+    expect(goal?.roundsStarted).toBe(1)
+    expect(test.adapter.requests).toHaveLength(1)
+
+    // 2. Edit maxGoalRounds to 2 while goal is blocked
+    const current = test.ctx.goals.get(test.agent)
+    if (current === undefined) throw new Error('missing goal')
+    test.ctx.goals.edit(test.agent, { id: current.id, revision: current.revision }, { maxGoalRounds: 2 })
+
+    // 3. Driver should auto-resume and dispatch round 2, then block at limit 2
+    goal = await waitForGoal(test.ctx, test.agent, current => current?.roundsStarted === 2 && current?.phase === 'blocked')
+    expect(goal?.blockedReason?.code).toBe('round-limit')
+    expect(goal?.roundsStarted).toBe(2)
+    expect(test.adapter.requests).toHaveLength(2)
+  })
 })

@@ -253,7 +253,7 @@ export function apply(ctx: Context, config: Config): void {
         description: 'edit | pause | resume | complete | blocked',
       },
       objective: { type: 'string', description: 'Replacement objective; valid only with action edit.' },
-      max_goal_rounds: { type: 'number', description: 'Replacement cap; valid only with action edit.' },
+      max_goal_rounds: { type: 'number', description: 'Replacement cap; valid with action edit or resume.' },
       blocked_reason: {
         type: 'string',
         description: 'Concrete blocking condition; required only with action blocked.',
@@ -272,19 +272,29 @@ export function apply(ctx: Context, config: Config): void {
         if (hasText(args.blocked_reason)) {
           throw new HarnessError('blocked_reason is valid only with action blocked', 'GOAL_TOOL_INVALID_UPDATE')
         }
-        const goal = ctx.goals.edit(execution.agent, ref, replacements)
+        let goal = ctx.goals.edit(execution.agent, ref, replacements)
+        if (goal.phase === 'blocked' && goal.blockedReason?.code === 'round-limit'
+          && replacements.maxGoalRounds !== undefined && goal.roundsStarted < goal.maxGoalRounds) {
+          goal = ctx.goals.resume(execution.agent, { id: goal.id, revision: goal.revision })
+        }
         return Promise.resolve(goalValue(goal))
       }
       if (args.action === 'pause' || args.action === 'resume') {
         requireDirectHuman(ctx, execution)
-        if (hasText(args.objective) || hasRoundCap(args.max_goal_rounds) || hasText(args.blocked_reason)) {
+        if (hasText(args.objective) || hasText(args.blocked_reason)
+          || (args.action === 'pause' && hasRoundCap(args.max_goal_rounds))) {
           throw new HarnessError(
-            'objective and max_goal_rounds are valid only with action edit; blocked_reason is valid only with action blocked',
+            'objective is valid only with action edit; max_goal_rounds is valid only with action edit or resume; blocked_reason is valid only with action blocked',
             'GOAL_TOOL_INVALID_UPDATE',
           )
         }
+        let targetRef = ref
+        if (args.action === 'resume' && hasRoundCap(args.max_goal_rounds)) {
+          const edited = ctx.goals.edit(execution.agent, targetRef, { maxGoalRounds: args.max_goal_rounds })
+          targetRef = { id: edited.id, revision: edited.revision }
+        }
         const current = ctx.goals.get(execution.agent)
-        if (args.action === 'resume' && current?.id === ref.id && current.revision === ref.revision
+        if (args.action === 'resume' && current?.id === targetRef.id && current.revision === targetRef.revision
           && current.phase === 'paused') {
           throw new HarnessError(
             'the model cannot resume a paused goal; the user must resume it',
@@ -292,8 +302,8 @@ export function apply(ctx: Context, config: Config): void {
           )
         }
         const goal = args.action === 'pause'
-          ? ctx.goals.pause(execution.agent, ref)
-          : ctx.goals.resume(execution.agent, ref)
+          ? ctx.goals.pause(execution.agent, targetRef)
+          : ctx.goals.resume(execution.agent, targetRef)
         return Promise.resolve(goalValue(goal))
       }
       const authority = completionAuthority(ctx, execution)

@@ -161,8 +161,18 @@ export function apply(ctx: Context): void {
       return
     }
 
-    const goal = currentGoal(state)
-    if (goal === undefined || goal.phase !== 'active' || goal.activation !== 'armed') return
+    let goal = currentGoal(state)
+    if (goal === undefined) return
+    if (goal.phase === 'blocked' && goal.blockedReason?.code === 'round-limit'
+      && goal.roundsStarted < goal.maxGoalRounds) {
+      try {
+        goal = ctx.goals.resume(agent, goalRef(goal))
+      } catch (error: unknown) {
+        ctx.logger.warn(`goal-round-driver: could not resume unblocked goal for agent "${agent.id}": ${renderThrown(error)}`)
+        return
+      }
+    }
+    if (goal.phase !== 'active' || goal.activation !== 'armed') return
     if (goal.roundsStarted >= goal.maxGoalRounds) {
       ctx.goals.block(agent, goalRef(goal), {
         code: 'round-limit',

@@ -660,4 +660,127 @@ describe('goal tool state transitions', () => {
     expect(blocked.concludesTurn).toBeUndefined()
     expect(blocked.additionalContexts).toBeUndefined()
   })
+
+  it('auto-resumes when update_goal edit increases max_goal_rounds above roundsStarted for round-limit blocked goal', async () => {
+    const { ctx, root } = await harness()
+    openTurn(root, { kind: 'user' })
+    const created = ctx.goals.create(root.agent, { objective: 'round limit auto resume', maxGoalRounds: 1 })
+    root.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'round 1' }],
+      source: { kind: 'goal', goalId: created.id, revision: created.revision, round: 1 },
+    }), { surfaceOp: 'append' })
+
+    const blocked = ctx.goals.block(root.agent, created, {
+      code: 'round-limit',
+      message: 'Goal reached its configured limit of 1 rounds.',
+    })
+    expect(blocked.phase).toBe('blocked')
+
+    openTurn(root, { kind: 'user' })
+    const edited = await execute(ctx, 'update_goal', {
+      goal_id: blocked.id,
+      revision: blocked.revision,
+      action: 'edit',
+      max_goal_rounds: 5,
+    }, root.agent)
+
+    const goal = resultGoal(edited)
+    expect(goal).toMatchObject({
+      id: created.id,
+      phase: 'active',
+      maxGoalRounds: 5,
+      roundsStarted: 1,
+    })
+    expect(goal.blockedReason).toBeUndefined()
+    expect(ctx.goals.get(root.agent)).toMatchObject({
+      phase: 'active',
+      activation: 'armed',
+      maxGoalRounds: 5,
+    })
+  })
+
+  it('allows update_goal resume with max_goal_rounds to expand limit and unblock', async () => {
+    const { ctx, root } = await harness()
+    openTurn(root, { kind: 'user' })
+    const created = ctx.goals.create(root.agent, { objective: 'resume with max rounds', maxGoalRounds: 2 })
+    root.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'round 1' }],
+      source: { kind: 'goal', goalId: created.id, revision: created.revision, round: 1 },
+    }), { surfaceOp: 'append' })
+    root.session.append('user/message', createUserMessage({
+      content: [{ type: 'text', text: 'round 2' }],
+      source: { kind: 'goal', goalId: created.id, revision: created.revision, round: 2 },
+    }), { surfaceOp: 'append' })
+
+    const blocked = ctx.goals.block(root.agent, created, {
+      code: 'round-limit',
+      message: 'Goal reached its configured limit of 2 rounds.',
+    })
+
+    openTurn(root, { kind: 'user' })
+    const resumed = await execute(ctx, 'update_goal', {
+      goal_id: blocked.id,
+      revision: blocked.revision,
+      action: 'resume',
+      max_goal_rounds: 10,
+    }, root.agent)
+
+    const goal = resultGoal(resumed)
+    expect(goal).toMatchObject({
+      id: created.id,
+      phase: 'active',
+      maxGoalRounds: 10,
+      roundsStarted: 2,
+    })
+    expect(goal.blockedReason).toBeUndefined()
+    expect(ctx.goals.get(root.agent)?.activation).toBe('armed')
+  })
+
+  it('keeps round-limit blocked goal blocked when update_goal edit does not increase max_goal_rounds above roundsStarted', async () => {
+    const { ctx, root } = await harness()
+    openTurn(root, { kind: 'user' })
+    const created = ctx.goals.create(root.agent, { objective: 'remain blocked', maxGoalRounds: 3 })
+    for (let r = 1; r <= 3; r++) {
+      root.session.append('user/message', createUserMessage({
+        content: [{ type: 'text', text: `round ${r}` }],
+        source: { kind: 'goal', goalId: created.id, revision: created.revision, round: r },
+      }), { surfaceOp: 'append' })
+    }
+    const blocked = ctx.goals.block(root.agent, created, {
+      code: 'round-limit',
+      message: 'Goal reached its configured limit of 3 rounds.',
+    })
+
+    openTurn(root, { kind: 'user' })
+    // Edit objective only
+    const editedObjective = await execute(ctx, 'update_goal', {
+      goal_id: blocked.id,
+      revision: blocked.revision,
+      action: 'edit',
+      objective: 'new objective without cap increase',
+    }, root.agent)
+    expect(resultGoal(editedObjective)).toMatchObject({
+      phase: 'blocked',
+      objective: 'new objective without cap increase',
+      maxGoalRounds: 3,
+      roundsStarted: 3,
+      blockedReason: { code: 'round-limit' },
+    })
+
+    // Edit maxGoalRounds to same or lower value
+    openTurn(root, { kind: 'user' })
+    const current = ctx.goals.get(root.agent)!
+    const editedCap = await execute(ctx, 'update_goal', {
+      goal_id: current.id,
+      revision: current.revision,
+      action: 'edit',
+      max_goal_rounds: 3,
+    }, root.agent)
+    expect(resultGoal(editedCap)).toMatchObject({
+      phase: 'blocked',
+      maxGoalRounds: 3,
+      roundsStarted: 3,
+      blockedReason: { code: 'round-limit' },
+    })
+  })
 })
