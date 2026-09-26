@@ -1,6 +1,22 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-22-canonical-base64-stack-overflow.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-22-canonical-base64-stack-overflow.md
-2026-09-22-canonical-base64-stack-overflow.md: 17cb6131b51639f44e4aa7c2c3236453f17c994f
-2026-09-22-canonical-base64-stack-overflow.zh.md: da32054285c2082d7bea780ea6357a2565e36976
+/agent-note-eliminate-regex-call-stack-overflow-on-large-canonical-base64-images:
+  en: de8ec600e1eac129
+  zh: 56daa2dda8c3d727
+/agent-note-eliminate-regex-call-stack-overflow-on-large-canonical-base64-images/problem:
+  en: f34910ed230f6104
+  zh: f6de67c00b7ade68
+/agent-note-eliminate-regex-call-stack-overflow-on-large-canonical-base64-images/decision:
+  en: eda24e58c5f6195f
+  zh: ec484e5491298174
+/agent-note-eliminate-regex-call-stack-overflow-on-large-canonical-base64-images/alternatives-considered:
+  en: dc274a3705b621bd
+  zh: 281a06237e3fc2bf
+/agent-note-eliminate-regex-call-stack-overflow-on-large-canonical-base64-images/impact:
+  en: 78a7b49da3f181b1
+  zh: 9d703069b0559534
+/agent-note-eliminate-regex-call-stack-overflow-on-large-canonical-base64-images/verification:
+  en: 5196d20e7871e1e9
+  zh: 4d8c86d0ff4c7fe2

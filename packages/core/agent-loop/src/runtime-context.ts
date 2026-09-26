@@ -20,7 +20,8 @@ const SOURCE = 'runtime-context'
 const CLEARED = 'Current runtime context: none. Earlier runtime-context snapshots no longer apply.'
 
 function isOwned(message: UserMessage): boolean {
-  return message.source?.kind === SOURCE || ((message.source as any)?.kind === 'plugin' && (message.source as any).plugin === SOURCE)
+  const source = message.source as { kind?: unknown; plugin?: unknown } | undefined
+  return source?.kind === SOURCE || (source?.kind === 'plugin' && source.plugin === SOURCE)
 }
 
 function textOf(message: Message): string | undefined {
@@ -41,9 +42,9 @@ export interface SystemPromptDecisionInput {
   /** Whether the prepared route for this attempt reads a later `system` message as the effective prompt. */
   inHistory: boolean
   /**
-   * Whether this step's request starts a new model-message series: a pre-step
-   * listener declared one, the surface was replaced since the last request, or
-   * the assembled tool schemas differ from the logged header.
+   * Whether prompt admission must consolidate: a pre-step listener declared a
+   * new series, the surface changed since the last request, or assembled tools
+   * changed on a route without tool-update support.
    */
   startsSeries: boolean
 }

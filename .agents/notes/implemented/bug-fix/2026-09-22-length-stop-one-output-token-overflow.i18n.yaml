@@ -1,6 +1,22 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-22-length-stop-one-output-token-overflow.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-22-length-stop-one-output-token-overflow.md
-2026-09-22-length-stop-one-output-token-overflow.md: 82aee1080f35b43ecefc49f3fc749ff9c64f8abb
-2026-09-22-length-stop-one-output-token-overflow.zh.md: c7abd5a3b714851ed7ec57dd90610a9e937eb94a
+/agent-note-context-overflow-on-length-stop-with-output-tokens:
+  en: a9b6f3dbe386fe99
+  zh: c32547f525c3fbf9
+/agent-note-context-overflow-on-length-stop-with-output-tokens/problem:
+  en: 7b513801116d8f37
+  zh: e5b1e6038a53f439
+/agent-note-context-overflow-on-length-stop-with-output-tokens/decision:
+  en: 3f400132d5625a6b
+  zh: cee11b49bbfbea3c
+/agent-note-context-overflow-on-length-stop-with-output-tokens/alternatives-considered:
+  en: e00f960a25aaf3e3
+  zh: efd00ac6bfe84330
+/agent-note-context-overflow-on-length-stop-with-output-tokens/consequences:
+  en: 055399a56444d574
+  zh: 0e72103eeb794788
+/agent-note-context-overflow-on-length-stop-with-output-tokens/testing:
+  en: 1e31b6b60ea510d0
+  zh: 0f6b4d4ae9bb7350

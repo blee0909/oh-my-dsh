@@ -86,6 +86,17 @@ export function escalationHintMarker(subject: string): string {
 }
 
 /**
+ * The model-facing `sandbox_permissions` parameter description, which carries
+ * the escalation rules for every enforcing family.
+ * @param subject - the family's noun for the denied action (`command` for
+ *   bash, `operation` for a filesystem mutation).
+ * @returns the parameter description, exactly as the model sees it.
+ */
+export function sandboxPermissionsDescription(subject: string): string {
+  return `The narrowest wider sandbox mode for a one-shot retry of the exact ${subject} the sandbox just denied; the retry asks the user for approval.`
+}
+
+/**
  * The closed outcome vocabulary of one escalation ask — structurally identical
  * to the approval seam's `ApprovalOutcome` so an `ApprovalService.request`
  * return is assignable without this package importing it.
@@ -102,10 +113,18 @@ export type EscalationOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'una
 export interface EscalationApprover<A = object, C = string> {
   /**
    * Ask the human to approve one action, resolving to a closed outcome.
-   * @param req - the audit-self-contained request (agent, tool, call id, reason, optional signal).
+   * @param req - the audit request with optional localized displayReason and presentation lifetime signal.
    * @returns the human's decision as a closed {@link EscalationOutcome}.
    */
-  request(req: { agent: A; toolName: string; callId: C; reason: string; signal?: AbortSignal }): Promise<EscalationOutcome>
+
+  request(req: {
+    agent: A
+    toolName: string
+    callId: C
+    reason: string
+    displayReason?: { readonly en: string; readonly [locale: string]: string }
+    signal?: AbortSignal
+  }): Promise<EscalationOutcome>
   /** Query the effective approval policy for a session when available. */
   effectivePolicy?(session: unknown): string
 }
@@ -202,6 +221,10 @@ export async function approveEscalation<A, C>(request: EscalationRequest, approv
     toolName: approval.toolName,
     callId: approval.callId,
     reason: `escalate sandbox to ${mode}: ${justification}`,
+    displayReason: {
+      en: `Allow this operation with ${mode} permissions: ${justification}`,
+      zh: `允许本次操作使用 ${mode} 权限：${justification}`,
+    },
     ...approval.signal ? { signal: approval.signal } : {},
   })
   switch (outcome) {
@@ -214,12 +237,13 @@ export async function approveEscalation<A, C>(request: EscalationRequest, approv
         ?? (isSessionWithHistory(session) ? readSessionPolicy(session) : undefined)
       if (policy === 'never') {
         throw new Error(
-          `sandbox escalation to "${mode}" was rejected: approval prompts are disabled in this session (approval policy is 'never') — `
+          `the user rejected escalating this ${subject} to "${mode}"; `
+          + `sandbox escalation to "${mode}" was rejected: approval prompts are disabled in this session (approval policy is 'never') — `
           + 'actions requiring approval are rejected automatically; do not retry with sandbox_permissions, '
           + 'surface this action to the user or delegating parent instead',
         )
       }
-      throw new Error(`the user rejected escalating this ${subject} to "${mode}"`)
+      throw new Error(`the user rejected escalating this ${subject} to "${mode}"; it stays denied, so stop and explain instead of working around it`)
     }
     case 'cancelled': throw new Error(`approval for escalating to "${mode}" was cancelled`)
     case 'unavailable': throw new Error(`sandbox escalation to "${mode}" requires approval, but no approval channel is available`)

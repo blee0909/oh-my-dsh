@@ -550,7 +550,7 @@ describe('sessions.fork', () => {
     const childEventTypes = child?.snapshotEvents().map(e => e.type) ?? []
     expect(childEventTypes.includes('agent/inbox/spliced')).toBe(false)
     expect(childEventTypes).toEqual([
-      'turn/start', 'user/message', 'turn/end', 'session/end-seed',
+      'turn/start', 'user/message', 'session/end-seed', 'turn/end',
     ])
     await ctx.fiber.dispose()
   })

@@ -1,6 +1,22 @@
-# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
-# side as of the last confirmed-consistent state. Both languages carry equal authority;
-# after editing either side, bring the other along and re-record with:
+# Bilingual-pair consistency record for 2026-09-20-dollar-block-closing-fence.md (docs/i18n/README.md): per heading
+# section, a hash of its English and Chinese blocks outside code blocks and generated regions.
+# After editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-09-20-dollar-block-closing-fence.md
-2026-09-20-dollar-block-closing-fence.md: 990515c9d901948a007e952a620e1aab564d4e28
-2026-09-20-dollar-block-closing-fence.zh.md: 0e5a66c769a2000c4165c91bdc48a8127f53c99b
+/agent-note-dollar-math-block-closing-fence:
+  en: f943632ac809df9b
+  zh: e5d879b1b6bd5aeb
+/agent-note-dollar-math-block-closing-fence/problem:
+  en: 75017f52e628f1c2
+  zh: d1c25c08d3143f74
+/agent-note-dollar-math-block-closing-fence/decision:
+  en: 10c510526b465a97
+  zh: ed2dd9186dcdd47e
+/agent-note-dollar-math-block-closing-fence/alternatives-considered:
+  en: 9042dcda0d095c81
+  zh: 62f54577341b5f42
+/agent-note-dollar-math-block-closing-fence/consequences:
+  en: 3c7443797537fd7f
+  zh: 934b6dbde2ce2c5e
+/agent-note-dollar-math-block-closing-fence/testing:
+  en: 969396cb38847b5f
+  zh: ec39709ece7fbe9b

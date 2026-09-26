@@ -30,6 +30,9 @@ export const QUOTA_EXCEEDED_CODE = 'QUOTA'
 /** Canonical provider-neutral code for a request rejected by content safety or moderation filters. */
 export const CONTENT_FILTER_CODE = 'CONTENT_FILTER'
 
+/** Account-token quota that can be replenished through the first-party billing page. */
+export const ACCOUNT_QUOTA_EXCEEDED_CODE = 'ACCOUNT_QUOTA'
+
 /**
  * Canonical provider-neutral code for a response that completed normally but
  * carried no content blocks at all. Providers occasionally emit a degenerate
