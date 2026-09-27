@@ -1292,4 +1292,44 @@ describe('session-query exact reads', () => {
     await disposing
     await persistence.dispose()
   })
+
+  it('bounds readEvent on live sessions to O(window) without full-session deep cloning (Discussions #7356)', async () => {
+    const ctx = await liveContext()
+    const session = ctx.sessions.create(SessionId('bounded-read-live'))
+
+    const N = 200
+    for (let i = 0; i < N; i++) {
+      session.append(
+        'user/message',
+        createUserMessage({
+          content: [{ type: 'text', text: `Event payload number ${i}` }],
+          source: { kind: 'user' },
+        }),
+        { surfaceOp: 'append' },
+      )
+    }
+
+    let cloneCount = 0
+    const origClone = globalThis.structuredClone
+    globalThis.structuredClone = function <T>(val: T, options?: StructuredSerializeOptions): T {
+      cloneCount++
+      return origClone(val, options)
+    }
+
+    try {
+      const result = await ctx.sessionQuery.readEvent({
+        sessionId: session.id,
+        seq: SessionSeq(10),
+        before: 1,
+        after: 1,
+      })
+
+      expect(result.target.seq).toBe(10)
+      expect(result.events).toHaveLength(3)
+      // Header (1) + target (1) + 2 neighbors (2) = 4 clones, never N (200) clones
+      expect(cloneCount).toBeLessThanOrEqual(5)
+    } finally {
+      globalThis.structuredClone = origClone
+    }
+  })
 })

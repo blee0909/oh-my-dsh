@@ -1,9 +1,9 @@
 /** Live/persisted logical-corpus resolution for session-query. */
 
 import type { Context, Fiber } from '@deepseek-ai/cordis'
-import type { Session, SessionEvent, SessionHeader, SessionId , SessionLogOffset } from '@deepseek-ai/dsh-session'
+import { SessionLogOffset, SessionSeq, snapshotSessionEvent, type Session, type SessionEvent, type SessionHeader, type SessionId } from '@deepseek-ai/dsh-session'
 import type SessionPersistence from '@deepseek-ai/dsh-session-persistence'
-import type { SessionRecord } from './types.ts'
+import type { SessionEventWindow, SessionRecord } from './types.ts'
 import { SessionQueryError } from './config.ts'
 import { readColdSessionLog, type ColdSessionLog } from './cold-read.ts'
 import { assertSessionHeadersCompatible } from './sources.ts'
@@ -117,6 +117,89 @@ export class SessionCorpus {
     }
     signal?.throwIfAborted()
     return snapshot
+  }
+
+  /**
+   * Load a bounded event window around one target sequence, without materializing
+   * or cloning the full logical session.
+   *
+   * For live sessions, reads directly from in-memory session log slices in O(window)
+   * time without cloning unrelated events.
+   * @param sessionId - session to resolve.
+   * @param seq - target sequence number.
+   * @param before - count of context events before target.
+   * @param after - count of context events after target.
+   * @param signal - optional cancellation.
+   */
+  async loadEventWindow(
+    sessionId: SessionId,
+    seq: SessionSeq,
+    before: number,
+    after: number,
+    signal?: AbortSignal,
+  ): Promise<SessionEventWindow> {
+    signal?.throwIfAborted()
+    const live = this._ctx.sessions.get(sessionId)
+    if (live !== undefined) {
+      const target = live.eventAt(seq)
+      if (target === undefined || target.seq !== seq) {
+        throw new SessionQueryError(
+          `session "${sessionId}" has no event at seq ${seq}`,
+          'SESSION_QUERY_EVENT_NOT_FOUND',
+        )
+      }
+      signal?.throwIfAborted()
+      const startSeq = SessionSeq(Math.max(0, seq - before))
+      const endSeq = SessionSeq(Math.min(live.seq - 1, seq + after))
+      const slice = live.snapshotEvents(SessionLogOffset(startSeq), SessionLogOffset(endSeq + 1))
+      const targetSnapshot = snapshotSessionEvent(target)
+      const events = slice.map((event: SessionEvent) => event === target
+        ? targetSnapshot
+        : snapshotSessionEvent(event))
+      return {
+        session: structuredClone(live.header),
+        inheritedEventCount: live.inheritedEventCount,
+        target: targetSnapshot,
+        events,
+        startSeq,
+        endSeq,
+      }
+    }
+
+    const persistence = this._persistence
+    if (persistence === undefined) throw notFound(sessionId)
+    const listed = (await listPersisted(persistence, signal)).find(header => header.id === sessionId)
+    signal?.throwIfAborted()
+    if (listed === undefined) throw notFound(sessionId)
+    const loaded = await inspectPersisted(persistence, sessionId, signal)
+    signal?.throwIfAborted()
+    const attached = this._ctx.sessions.get(sessionId)
+    if (attached !== undefined) {
+      return this.loadEventWindow(sessionId, seq, before, after, signal)
+    }
+    assertSessionHeadersCompatible(loaded.header, listed)
+    const target = loaded.events[seq]
+    if (target === undefined || target.seq !== seq) {
+      throw new SessionQueryError(
+        `session "${sessionId}" has no event at seq ${seq}`,
+        'SESSION_QUERY_EVENT_NOT_FOUND',
+      )
+    }
+    const startSeq = SessionSeq(Math.max(0, seq - before))
+    const endSeq = SessionSeq(Math.min(loaded.events.length - 1, seq + after))
+    const targetSnapshot = snapshotSessionEvent(target)
+    const events = loaded.events.slice(startSeq, endSeq + 1)
+      .map((event: SessionEvent) => event === target
+        ? targetSnapshot
+        : snapshotSessionEvent(event))
+    return {
+      session: structuredClone(loaded.header),
+      inheritedEventCount: loaded.inheritedEventCount,
+      target: targetSnapshot,
+      events,
+      startSeq,
+      endSeq,
+    }
   }
 
   /**

@@ -8,7 +8,6 @@ import { currentSessionMessageProjections } from '@deepseek-ai/dsh-session-forma
 import { Context, Service } from '@deepseek-ai/cordis'
 import {
   Session,
-  SessionSeq,
   snapshotSessionEvent,
   type SessionId,
   type SessionSeq as SessionSeqType,
@@ -367,30 +366,7 @@ export abstract class SessionQueryEngine extends Service {
     after: number,
     signal?: AbortSignal,
   ): Promise<SessionEventWindow> {
-    const loaded = await this._corpus.load(sessionId, signal)
-    signal?.throwIfAborted()
-    const target = loaded.events[seq]
-    if (target === undefined || target.seq !== seq) {
-      throw new SessionQueryError(
-        `session "${sessionId}" has no event at seq ${seq}`,
-        'SESSION_QUERY_EVENT_NOT_FOUND',
-      )
-    }
-    const startSeq = SessionSeq(Math.max(0, seq - before))
-    const endSeq = SessionSeq(Math.min(loaded.events.length - 1, seq + after))
-    const targetSnapshot = snapshotSessionEvent(target)
-    const events = loaded.events.slice(startSeq, endSeq + 1)
-      .map(event => event === target
-        ? targetSnapshot
-        : snapshotSessionEvent(event))
-    return {
-      session: structuredClone(loaded.header),
-      inheritedEventCount: loaded.inheritedEventCount,
-      target: targetSnapshot,
-      events,
-      startSeq,
-      endSeq,
-    }
+    return this._corpus.loadEventWindow(sessionId, seq, before, after, signal)
   }
 
   private _readWindow(name: 'before' | 'after', value: number | undefined): number {
