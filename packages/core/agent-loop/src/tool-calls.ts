@@ -6,8 +6,8 @@
  * and drains started calls.
  *
  * Abort records synthetic error results for skipped calls so replay stays
- * valid. A terminal scheduler failure preserves already-recorded `tool/call`
- * events without fabricating results.
+ * valid. A terminal scheduler failure rejects after draining; the owning step
+ * records conservative recovery results before closing.
  * @module dsh-agent-loop/tool-calls
  */
 
@@ -49,20 +49,15 @@ function requireScheduler(ctx: Context): ToolRuntimeScheduler {
   return scheduler
 }
 
-function failureMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message
-  if (typeof error === 'string' && error) return error
-  return 'internal scheduler failure'
-}
-
 /**
  * Schedule one assistant step's tool calls by their live concurrency mode.
  * Ordinary completion and abort commit started-call results in order. Abort
  * drains them, records synthetic results for unstarted calls, and returns with
  * the signal still aborted after accepting started-call context through the
- * batch. Scheduler failure drains dispatches, records recovery results for
- * uncompleted calls so session history remains serializable, and rethrows.
- *
+ * caller-supplied acceptor (the machine stages it in its next-step inbox for the
+ * step boundary). An internal scheduler failure stops new dispatches, drains
+ * already-started dispatches, and rejects with the first failure. The owning
+ * step supplies error results for requests without a committed outcome.
  * The committed step's AgentLoop driver boundary supplies the initiating Agent
  * that becomes each explicit {@link ToolExecutionInput.agent}.
  *
@@ -98,29 +93,21 @@ export async function executeToolCalls(
 
   let next = 0
   let concluded = false
-  let currentGroup: PlannedCall[] = []
-  try {
-    while (next < planned.length) {
-      // Commit before classifying again so registry changes affect unstarted calls.
-      // oxlint-disable-next-line typescript/no-non-null-assertion -- bounded by the loop condition
-      const first = planned[next]!
-      const mode = ctx.tools.executionMode(first.exec).kind
-      currentGroup = mode === 'parallel' ? planned.slice(next) : [first]
-      const outcome = await runGroup(
-        ctx, turn, step, currentGroup, mode, signal, acceptContext,
-      )
-      next += outcome.consumed
-      currentGroup = []
-      concluded ||= outcome.concluded
-      if (outcome.aborted) {
-        for (const call of planned.slice(next)) appendSkippedToolCall(session, turn, step, call.block)
-        return { concluded }
-      }
+  while (next < planned.length) {
+    // Commit before classifying again so registry changes affect unstarted calls.
+    // oxlint-disable-next-line typescript/no-non-null-assertion -- bounded by the loop condition
+    const first = planned[next]!
+    const mode = ctx.tools.executionMode(first.exec).kind
+    const group = mode === 'parallel' ? planned.slice(next) : [first]
+    const outcome = await runGroup(
+      ctx, turn, step, group, mode, signal, acceptContext,
+    )
+    next += outcome.consumed
+    concluded ||= outcome.concluded
+    if (outcome.aborted) {
+      for (const call of planned.slice(next)) appendSkippedToolCall(session, turn, step, call.block)
+      return { concluded }
     }
-  } catch (error: unknown) {
-    const remainingIndex = next + currentGroup.length
-    for (const call of planned.slice(remainingIndex)) appendSkippedToolCall(session, turn, step, call.block)
-    throw error
   }
   return { concluded }
 }
@@ -140,8 +127,8 @@ function parseArguments(raw: string): unknown {
  * drain and remains for the caller's next barrier. Results and contexts commit
  * in model order. Abort stops starts, drains and commits started calls, accepts
  * their contexts into the owning batch, records results for skipped calls, and
- * returns an aborted outcome. Scheduler failure drains dispatches without
- * committing synthetic recovery results.
+ * returns an aborted outcome. Scheduler failure drains dispatches and rejects
+ * for the owning step to record recovery results.
  */
 async function runGroup(
   ctx: Context,
@@ -258,27 +245,6 @@ async function runGroup(
   } catch (error: unknown) {
     schedulerFailure ??= { error }
     await Promise.allSettled(inFlight.values())
-    const errText = failureMessage(schedulerFailure.error)
-    while (committed < started) {
-      // oxlint-disable-next-line typescript/no-non-null-assertion -- bounded by started
-      const call = group[committed]!
-      // oxlint-disable-next-line typescript/no-non-null-assertion -- bounded by started
-      const callSeq = callSeqs[committed]!
-      const slot = slots[committed]
-      const result: ToolExecutionResult = slot?.result ?? {
-        content: [{ type: 'text', text: `Error: tool execution failed (${errText})` }],
-        isError: true,
-        error: {
-          message: errText,
-          info: { name: 'ToolSchedulerError', code: 'SCHEDULER_FAILURE' },
-        },
-      }
-      appendToolResult(session, turn, step, call.block, result, callSeq)
-      committed++
-    }
-    for (const call of group.slice(started)) {
-      appendSkippedToolCall(session, turn, step, call.block)
-    }
     throw schedulerFailure.error
   }
 
