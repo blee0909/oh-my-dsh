@@ -13,11 +13,10 @@ export type BrowserTimeZoneContext =
 
 /** Read and validate a Host-canonicalized browser zone from one ordinary user-rpc message. */
 function browserTimeZone(message: UserMessage): string | undefined {
-  const source = message.source
-  const value = source.kind === 'user'
-    && 'rpcId' in source
+  const candidate = message as unknown as { source?: { kind?: unknown; rpcId?: unknown; clientTimeZone?: unknown } }
+  const source = candidate.source
+  const value = source?.kind === 'user'
     && typeof source.rpcId === 'string'
-    && 'clientTimeZone' in source
     && typeof source.clientTimeZone === 'string'
     ? source.clientTimeZone
     : undefined

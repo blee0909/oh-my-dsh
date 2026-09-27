@@ -16,11 +16,9 @@ import type {
   RequestErrorAction,
 } from '@deepseek-ai/dsh-agent'
 import { agentEvents, assembleContextFor } from '@deepseek-ai/dsh-agent'
-import { randomUUID } from 'node:crypto'
 import type { GenerateOptions, LlmCallConfig, Message, PreparedLlmCall } from '@deepseek-ai/dsh-llm'
 import {
   LlmError,
-  MessageId,
   createAssistantMessage,
   createDeveloperMessage,
   errorChain,
@@ -35,7 +33,7 @@ import { joinContextSections, renderContextSections, renderPrompt } from '@deeps
 import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import type {} from '@deepseek-ai/dsh-session-projection'
 import type { Context } from '@deepseek-ai/cordis'
-import { ReactLoopInbox } from './inbox.ts'
+import { ReactLoopInbox, normalizeUserMessage } from './inbox.ts'
 import { RuntimeContextProjection } from './runtime-context.ts'
 import { AssistantStreamAttempt } from './assistant-stream.ts'
 import { SystemPromptProjection } from './runtime-context.ts'
@@ -153,32 +151,25 @@ export class ReactLoopAgent implements Agent {
     }
   }
 
-  send(message: UserMessage, target: InboxTarget, wakeup: boolean): void {
+  send(message: UserMessage | string, target: InboxTarget, wakeup: boolean): void {
     // Waking input cannot join an aborted activity, so it starts the next turn.
     // Captured before the insertion so a reentrant cancel from a splice observer cannot reclassify it.
     const wakingAfterAbort = wakeup && this.phase.kind !== 'idle' && this.phase.abort.signal.aborted
     const resolvedTarget = wakingAfterAbort ? 'next-turn' : target
-    const normalized: UserMessage = (message.id !== undefined && message.source !== undefined && message.role === 'user')
-      ? message
-      : {
-        ...message,
-        id: message.id ?? MessageId(randomUUID()),
-        role: 'user',
-        source: message.source ?? { kind: 'user' },
-      }
+    const normalized = normalizeUserMessage(message)
     this.inbox.splice(resolvedTarget, Infinity, 0, [normalized])
     if (wakeup) this.wakeDriver(wakingAfterAbort)
   }
 
-  followup(input: UserMessage): void {
+  followup(input: UserMessage | string): void {
     this.send(input, 'next-turn', true)
   }
 
-  steer(input: UserMessage): void {
+  steer(input: UserMessage | string): void {
     this.send(input, 'next-step', true)
   }
 
-  inject(input: UserMessage): void {
+  inject(input: UserMessage | string): void {
     this.send(input, 'next-step', false)
   }
 

@@ -4,7 +4,8 @@
  * @module @deepseek-ai/dsh-agent-loop/inbox
  */
 
-import type { MessageId } from '@deepseek-ai/dsh-llm'
+import { randomUUID } from 'node:crypto'
+import { MessageId, type ContentBlock, type MessageSource } from '@deepseek-ai/dsh-llm'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import type SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import type { Session, SessionEventMap, UserMessage } from '@deepseek-ai/dsh-session'
@@ -16,6 +17,64 @@ import type {
   InboxWireState,
 } from '@deepseek-ai/dsh-agent'
 import { z } from 'zod'
+
+/**
+ * Normalize arbitrary caller input or durable items into a well-formed UserMessage.
+ * Defends against bare strings, missing source, or malformed content blocks.
+ */
+export function normalizeUserMessage(input: unknown): UserMessage {
+  if (typeof input === 'string') {
+    return {
+      id: MessageId(randomUUID()),
+      role: 'user',
+      content: [{ type: 'text', text: input }],
+      source: { kind: 'user' },
+    }
+  }
+  if (typeof input === 'object' && input !== null) {
+    const candidate = input as Record<string, unknown>
+    const hasValidSource = candidate.source !== undefined
+      && typeof candidate.source === 'object'
+      && candidate.source !== null
+      && typeof (candidate.source as Record<string, unknown>).kind === 'string'
+    const hasValidId = typeof candidate.id === 'string' && candidate.id.length > 0
+    const hasValidContent = Array.isArray(candidate.content)
+    const isUserRole = candidate.role === 'user'
+
+    if (hasValidId && hasValidSource && hasValidContent && isUserRole) {
+      return input as UserMessage
+    }
+
+    const id = hasValidId ? candidate.id as MessageId : MessageId(randomUUID())
+    const source = hasValidSource ? candidate.source as MessageSource : { kind: 'user' }
+    let content: readonly ContentBlock[]
+    if (hasValidContent) {
+      content = candidate.content as readonly ContentBlock[]
+    } else if (typeof candidate.content === 'string') {
+      content = [{ type: 'text', text: candidate.content }]
+    } else if (typeof candidate.text === 'string') {
+      content = [{ type: 'text', text: candidate.text }]
+    } else {
+      content = [{ type: 'text', text: '' }]
+    }
+    return {
+      ...candidate,
+      id,
+      role: 'user',
+      content,
+      source,
+    } as UserMessage
+  }
+  const text = typeof input === 'number' || typeof input === 'boolean' || typeof input === 'bigint'
+    ? String(input)
+    : ''
+  return {
+    id: MessageId(randomUUID()),
+    role: 'user',
+    content: [{ type: 'text', text }],
+    source: { kind: 'user' },
+  }
+}
 
 /** Wire validation for pending agent input reconstructed from durable inbox splices. */
 export const inboxProjectionSchema = z.object({
@@ -39,7 +98,9 @@ export const inboxProjectionDefinition = {
         || splice.start + removedCount > inbox.length) {
         throw new Error('invalid inbox splice')
       }
-      const next = inbox.toSpliced(splice.start, removedCount, ...splice.inserted)
+      const rawInserted = splice.inserted
+      const normalizedInserted = rawInserted.map(item => normalizeUserMessage(item))
+      const next = inbox.toSpliced(splice.start, removedCount, ...normalizedInserted)
       const ids = new Set<string>()
       for (const message of splice.target === 'next-turn'
         ? [...next, ...state['next-step']]
@@ -118,7 +179,7 @@ export class ReactLoopInbox implements InboxContract {
    * @param target - pending list to extend.
    * @param message - message to append.
    */
-  append(target: InboxTarget, message: UserMessage): void {
+  append(target: InboxTarget, message: UserMessage | string): void {
     this.splice(target, this.current()[target].length, 0, [message])
   }
 
@@ -127,7 +188,7 @@ export class ReactLoopInbox implements InboxContract {
    * @param target - pending list to extend.
    * @param message - message to prepend.
    */
-  prepend(target: InboxTarget, message: UserMessage): void {
+  prepend(target: InboxTarget, message: UserMessage | string): void {
     this.splice(target, 0, 0, [message])
   }
 
@@ -137,7 +198,7 @@ export class ReactLoopInbox implements InboxContract {
    * @param newMessage - replacement message.
    * @returns whether the message was still pending.
    */
-  replace(messageId: MessageId, newMessage: UserMessage): boolean {
+  replace(messageId: MessageId, newMessage: UserMessage | string): boolean {
     const location = this.locate(messageId)
     if (location === undefined) return false
     this.splice(location.target, location.index, 1, [newMessage])
@@ -168,7 +229,7 @@ export class ReactLoopInbox implements InboxContract {
     target: InboxTarget,
     start: number,
     deleteCount: number,
-    inserted: UserMessage[],
+    inserted: readonly (UserMessage | string)[],
   ): UserMessage[] {
     return this.mutate(target, start, deleteCount, inserted, true)
   }
@@ -199,7 +260,7 @@ export class ReactLoopInbox implements InboxContract {
     target: InboxTarget,
     start: number,
     deleteCount: number,
-    inserted: UserMessage[],
+    inserted: readonly (UserMessage | string)[],
     discardRemoved: boolean,
   ): UserMessage[] {
     const state = this.current()
@@ -215,7 +276,8 @@ export class ReactLoopInbox implements InboxContract {
       inbox.length - actualStart,
     )
     if (actualDeleteCount === 0 && inserted.length === 0) return []
-    const candidate = inbox.toSpliced(actualStart, actualDeleteCount, ...inserted)
+    const normalizedInserted = inserted.map(item => normalizeUserMessage(item))
+    const candidate = inbox.toSpliced(actualStart, actualDeleteCount, ...normalizedInserted)
     const ids = new Set<string>()
     for (const message of target === 'next-turn'
       ? [...candidate, ...state['next-step']]
@@ -228,7 +290,7 @@ export class ReactLoopInbox implements InboxContract {
       target,
       start: actualStart,
       ...(actualDeleteCount === 0 ? {} : { removedCount: actualDeleteCount }),
-      inserted,
+      inserted: normalizedInserted,
       ...(outcome === undefined ? {} : { outcome }),
     }
     const removed = inbox.slice(actualStart, actualStart + actualDeleteCount)
