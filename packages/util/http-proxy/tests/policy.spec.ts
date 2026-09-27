@@ -78,7 +78,7 @@ describe('resolveProxyPolicy', () => {
     const { policy } = resolveProxyPolicy(env({ HTTP_PROXY: PROXY, HTTPS_PROXY: OTHER, NO_PROXY: 'example.com' }))
     expect(policy.httpProxy).toBe(PROXY)
     expect(policy.httpsProxy).toBe(OTHER)
-    expect(policy.noProxy).toBe('example.com,localhost,127.0.0.1,::1,[::1]')
+    expect(policy.noProxy).toBe('example.com,localhost,127.0.0.1,::1')
     expect(policy.source).toBe('env')
   })
 
@@ -129,7 +129,12 @@ describe('resolveProxyPolicy', () => {
 
   it('does not repeat a loopback entry the user already listed', () => {
     const { policy } = resolveProxyPolicy(env({ HTTP_PROXY: PROXY, NO_PROXY: 'localhost, 127.0.0.1' }))
-    expect(policy.noProxy).toBe('localhost,127.0.0.1,::1,[::1]')
+    expect(policy.noProxy).toBe('localhost,127.0.0.1,::1')
+  })
+
+  it('normalizes bracketed [::1] in user bypass list to bare ::1 (Discussions #7364)', () => {
+    const { policy } = resolveProxyPolicy(env({ HTTP_PROXY: PROXY, NO_PROXY: 'example.com,[::1]' }))
+    expect(policy.noProxy).toBe('example.com,::1,localhost,127.0.0.1')
   })
 
   it('keeps a scheme direct when its own value was refused, rather than falling back', () => {

@@ -278,11 +278,28 @@ describe('proxyEnvironmentForChild', () => {
         // The bypass list is the resolved one: it only adds entries to what the user wrote, and
         // without the loopback ones the child sends its own localhost traffic to a proxy that
         // cannot route it.
-        expect(child.no_proxy).toBe('example.com,localhost,127.0.0.1,::1,[::1]')
-        expect(child.NO_PROXY).toBe('example.com,localhost,127.0.0.1,::1,[::1]')
+        expect(child.no_proxy).toBe('example.com,localhost,127.0.0.1,::1')
+        expect(child.NO_PROXY).toBe('example.com,localhost,127.0.0.1,::1')
         // The SOCKS value kept for `curl` is one Node would refuse at startup, so the flag that makes
         // Node read it is withheld and a child Node connects directly rather than failing to start.
         expect(child.NODE_USE_ENV_PROXY).toBeUndefined()
+      } finally {
+        await dispose()
+      }
+    })
+  })
+
+  it('hands child process NO_PROXY without bracketed [::1], defending httpx and python tools (Discussions #7364)', async () => {
+    await withCleanProxyEnv(async () => {
+      process.env.HTTP_PROXY = proxyUrl
+      process.env.NO_PROXY = 'localhost,127.0.0.1,::1,[::1]'
+      const { dispose } = await install(env({ HTTP_PROXY: proxyUrl, NO_PROXY: 'localhost,127.0.0.1,::1,[::1]' }))
+      try {
+        const child = proxyEnvironmentForChild()
+        expect(child.no_proxy).toBe('localhost,127.0.0.1,::1')
+        expect(child.NO_PROXY).toBe('localhost,127.0.0.1,::1')
+        expect(child.no_proxy).not.toContain('[::1]')
+        expect(child.NO_PROXY).not.toContain('[::1]')
       } finally {
         await dispose()
       }

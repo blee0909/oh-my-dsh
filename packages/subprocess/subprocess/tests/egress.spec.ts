@@ -134,7 +134,7 @@ describe('child process egress', () => {
       expect(child.HTTPS_PROXY).toBeUndefined()
       // The bypass list is always the resolved one; the user set none, so it is the loopback
       // entries alone — without them the child sends its own localhost traffic to the proxy.
-      expect(child.NO_PROXY).toBe('localhost,127.0.0.1,::1,[::1]')
+      expect(child.NO_PROXY).toBe('localhost,127.0.0.1,::1')
     } finally {
       await dispose()
     }

@@ -27,10 +27,10 @@ export interface EnvLookup {
  * loopback traffic turns the Web UI, the Connection transport, and every local test server into a
  * routing loop, so the bypass is not optional.
  *
- * `::1` and `[::1]` are both listed because the resolved string is also handed to undici, whose
- * matcher reads a bare `::1` as host `:` port `1` and therefore never bypasses it.
+ * Uses standard bare IP addresses without brackets (`::1`) so child processes running tools in
+ * other runtimes (such as Python's httpx, urllib, curl) do not crash on invalid port parsing.
  */
-export const LOOPBACK_NO_PROXY: readonly string[] = ['localhost', '127.0.0.1', '::1', '[::1]']
+export const LOOPBACK_NO_PROXY: readonly string[] = ['localhost', '127.0.0.1', '::1']
 
 /**
  * The environment names each policy field owns, lowercase first — undici reads the lowercase name
@@ -200,14 +200,33 @@ function resolveScheme(own: ProxyCandidate, ...fallbacks: (string | undefined)[]
  * Merge {@link LOOPBACK_NO_PROXY} into a bypass list, preserving the caller's entries and order.
  * A list of `*` already bypasses everything and is returned unchanged.
  *
+ * Bare bracketed IPv6 entries (`[::1]`) without a port are normalized to their standard bare form
+ * (`::1`) so child process runtimes (e.g. Python's httpx, urllib) do not fail to parse them.
+ *
  * @param noProxy - the bypass list as the environment supplied it.
  * @returns the effective bypass list.
  */
 function withLoopback(noProxy: string | undefined): string {
-  const entries = (noProxy ?? '').split(/[,\s]+/).map(entry => entry.trim()).filter(entry => entry !== '')
-  if (entries.includes('*')) return '*'
-  const present = new Set(entries.map(entry => entry.toLowerCase()))
-  return [...entries, ...LOOPBACK_NO_PROXY.filter(entry => !present.has(entry))].join(',')
+  const rawEntries = (noProxy ?? '').split(/[,\s]+/).map(entry => entry.trim()).filter(entry => entry !== '')
+  if (rawEntries.includes('*')) return '*'
+  const normalized: string[] = []
+  const seen = new Set<string>()
+  for (const raw of rawEntries) {
+    // Normalize bracketed IPv6 literal without port to standard bare form: `[::1]` -> `::1`
+    const entry = raw.toLowerCase() === '[::1]' ? '::1' : raw
+    const key = entry.toLowerCase()
+    if (!seen.has(key)) {
+      seen.add(key)
+      normalized.push(entry)
+    }
+  }
+  for (const loopback of LOOPBACK_NO_PROXY) {
+    if (!seen.has(loopback.toLowerCase())) {
+      seen.add(loopback.toLowerCase())
+      normalized.push(loopback)
+    }
+  }
+  return normalized.join(',')
 }
 
 /**
