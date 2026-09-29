@@ -14,8 +14,8 @@ export type { ScopeLayer } from './store.ts'
 /** An opaque, identity-compared scope key. */
 export type ScopeKey = object
 
-/** Context tag written by {@link createScope}. */
-const kScope = Symbol('dsh.scope')
+/** Context tag written by {@link createScope}. Process-global to survive module duplication. */
+export const kScope: unique symbol = Symbol.for('dsh.scope') as never
 
 declare const ScopedBrand: unique symbol
 
@@ -26,8 +26,18 @@ declare const ScopedBrand: unique symbol
  */
 export type Scoped<T extends object> = object & { readonly [ScopedBrand]: T }
 
-/** The key associated with each carrier. Presence distinguishes an unkeyed carrier from a non-carrier. */
-const carrierKeys = new WeakMap<object, ScopeKey | undefined>()
+const CARRIER_KEYS_KEY = Symbol.for('dsh.scope.carrierKeys')
+type CarrierKeysMap = WeakMap<object, ScopeKey | undefined>
+
+/**
+ * The key associated with each carrier. Presence distinguishes an unkeyed carrier from a non-carrier.
+ * Process-global to survive module duplication.
+ */
+const carrierKeys: CarrierKeysMap =
+  ((globalThis as Record<symbol, unknown>)[CARRIER_KEYS_KEY] ??= new WeakMap<object, ScopeKey | undefined>()) as CarrierKeysMap
+
+const SCOPE_PARENTS_KEY = Symbol.for('dsh.scope.scopeParents')
+type ScopeParentsMap = WeakMap<ScopeKey, ScopeKey>
 
 /**
  * The enclosing scope of each key. One relation powers both directions of
@@ -35,8 +45,10 @@ const carrierKeys = new WeakMap<object, ScopeKey | undefined>()
  * sees its ancestors' layers — {@link ScopedLayers}), and event admission
  * extends UP it (a listener tagged with an ancestor receives events dispatched
  * to a descendant key — {@link scopeTarget}).
+ * Process-global to survive module duplication.
  */
-const scopeParents = new WeakMap<ScopeKey, ScopeKey>()
+const scopeParents: ScopeParentsMap =
+  ((globalThis as Record<symbol, unknown>)[SCOPE_PARENTS_KEY] ??= new WeakMap<ScopeKey, ScopeKey>()) as ScopeParentsMap
 
 /** The privileged handle to move one scope key's parent link. */
 export interface ScopeParentBinding {

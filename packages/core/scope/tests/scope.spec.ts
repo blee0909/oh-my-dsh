@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { bindScopeParent, carrierKeyOf, createScope, isScopeCarrier, scopeChainOf, scopeOf, scopeParentOf, scopeTarget } from '@deepseek-ai/dsh-scope'
+import { bindScopeParent, carrierKeyOf, createScope, isScopeCarrier, kScope, scopeChainOf, scopeOf, scopeParentOf, scopeTarget } from '@deepseek-ai/dsh-scope'
 import type { Scope, Scoped } from '@deepseek-ai/dsh-scope'
 
 declare module '@deepseek-ai/cordis' {
@@ -218,5 +218,59 @@ describe('scope parent chain', () => {
     seen.length = 0
     emit.emit(scopeTarget({}, preset), 'probe/event')
     expect(seen.sort()).toEqual(['preset', 'untagged'])
+  })
+})
+
+describe('Discussions #7394: process-global scope identity across duplicate module instances', () => {
+  it('anchors kScope to Symbol.for("dsh.scope")', () => {
+    expect(kScope).toBe(Symbol.for('dsh.scope'))
+  })
+
+  it('allows duplicate module instances to share scope tags, carriers, and parent links', () => {
+    const ctx = new Context()
+    const presetKey = { agentPreset: 'standard' }
+    const agentKey = { agent: 'subagent-1' }
+
+    // Instance 1 mints preset scope and agent scope with parent link
+    const presetScope = createScope(ctx, presetKey)
+    const agentScope = createScope(ctx, agentKey, { parent: presetKey })
+
+    // Simulate Instance 2 reading context tag via global Symbol.for('dsh.scope')
+    const simulatedScopeOf = (c: Context): object | undefined =>
+      (c as Context & { [sym: symbol]: object })[Symbol.for('dsh.scope')]
+
+    expect(simulatedScopeOf(presetScope.ctx)).toBe(presetKey)
+    expect(simulatedScopeOf(agentScope.ctx)).toBe(agentKey)
+
+    // Simulate Instance 2 accessing process-global scopeParents
+    const globalParentsMap = (globalThis as Record<symbol, WeakMap<object, object>>)[Symbol.for('dsh.scope.scopeParents')]
+    expect(globalParentsMap).toBeInstanceOf(WeakMap)
+    expect(globalParentsMap?.get(agentKey)).toBe(presetKey)
+    expect(scopeParentOf(agentKey)).toBe(presetKey)
+    expect(scopeChainOf(agentKey)).toEqual([agentKey, presetKey])
+
+    // Instance 1 creates carrier; verify Instance 2 can identify carrier and retrieve key
+    const carrier = scopeTarget({ subject: 'test' }, agentKey)
+    const globalCarriersMap = (globalThis as Record<symbol, WeakMap<object, object | undefined>>)[Symbol.for('dsh.scope.carrierKeys')]
+    expect(globalCarriersMap).toBeInstanceOf(WeakMap)
+    expect(globalCarriersMap?.has(carrier)).toBe(true)
+    expect(globalCarriersMap?.get(carrier)).toBe(agentKey)
+    expect(isScopeCarrier(carrier)).toBe(true)
+    expect(carrierKeyOf(carrier)).toBe(agentKey)
+  })
+
+  it('prevents preset persona registration from falling into global unscoped layer during dual module resolution (#7394)', () => {
+    const ctx = new Context()
+    const presetKey = { agentPreset: 'mode-investigate' }
+    const presetScope = createScope(ctx, presetKey)
+
+    // In #7394, when @deepseek-ai/dsh-scope was duplicated, scopeOf(presetScope.ctx)
+    // in a second module instance returned undefined because kScope was a local Symbol('dsh.scope').
+    // This caused the preset's deployment:persona to register as scope === undefined (global layer),
+    // immediately colliding with the already-registered global deployment persona.
+    // With process-global kScope, any module instance reading presetScope.ctx resolves presetKey.
+    const resolvedScope = scopeOf(presetScope.ctx)
+    expect(resolvedScope).toBe(presetKey)
+    expect(resolvedScope).not.toBeUndefined()
   })
 })
