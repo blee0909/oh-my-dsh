@@ -9,6 +9,7 @@
  * @module @deepseek-ai/dsh-bash-local
  */
 
+import { statSync } from 'node:fs'
 import type { Volatile } from '@deepseek-ai/cordis'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
@@ -84,6 +85,25 @@ export function assertServiceableBashConfig(config: Config): void {
   assertPositiveFinite('graceMs', config.graceMs.get())
   if (config.graceMs.get() > MAX_TIMER_DELAY_MS) {
     throw new Error(`bash-local: graceMs must be no greater than ${MAX_TIMER_DELAY_MS}`)
+  }
+}
+
+/**
+ * Reject a working directory that cannot be entered before attempting to spawn
+ * bash, preventing Node's libuv spawn from misleadingly reporting ENOENT for
+ * argv[0] (Discussions #7379).
+ * @param workdir - absolute or relative path to the working directory.
+ * @throws Error when the directory does not exist or is not a directory.
+ */
+export function assertEnterableWorkdir(workdir: string): void {
+  let stats
+  try {
+    stats = statSync(workdir)
+  } catch {
+    throw new Error(`bash-local: working directory ${workdir} does not exist`)
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`bash-local: working directory ${workdir} is not a directory`)
   }
 }
 
@@ -185,6 +205,7 @@ export class LocalBashExecutor extends ShellExecutor {
   }
 
   async execute(spec: ShellExecSpec): Promise<ShellExecution> {
+    assertEnterableWorkdir(spec.workdir)
     return this.executeArgv(spec, ['bash', '-c', spec.command])
   }
 

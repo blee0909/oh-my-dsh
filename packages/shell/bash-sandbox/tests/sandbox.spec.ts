@@ -277,6 +277,13 @@ describe('the provider hand-off', () => {
 })
 
 describe('fail closed', () => {
+  it('rejects nonexistent workdir with clear descriptive error (Discussions #7379)', async () => {
+    const { bash } = await setup({ mode: 'workspace-write' })
+    const missing = join(tmpdir(), `missing-dsh-sandbox-dir-${Date.now()}`)
+    await expect(bash.execute(bash.resolve({ command: 'true', workdir: missing })))
+      .rejects.toThrow(`bash-local: working directory ${missing} does not exist`)
+  })
+
   it('propagates the provider\'s structured SANDBOX_UNAVAILABLE on run() and start()', async () => {
     const { bash } = await setup({}, () => { throw new SandboxUnavailableError('read-only') })
     const spec = bash.resolve({ command: 'echo hi' })

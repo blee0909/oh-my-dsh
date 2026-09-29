@@ -76,6 +76,18 @@ describe('LocalBashExecutor.run', () => {
     expect(result.stdout.text.trim()).toBe(process.cwd())
   })
 
+  it('rejects nonexistent or non-directory workdir with clear descriptive error (Discussions #7379)', async () => {
+    const { bash } = await setup()
+    const missing = join(tmpdir(), `missing-dsh-dir-${Date.now()}`)
+    await expect(bash.execute(bash.resolve({ command: 'pwd', workdir: missing })))
+      .rejects.toThrow(`bash-local: working directory ${missing} does not exist`)
+
+    const fileWorkdir = join(spillDir, 'regular-file-as-dir.txt')
+    writeFileSync(fileWorkdir, 'not a directory')
+    await expect(bash.execute(bash.resolve({ command: 'pwd', workdir: fileWorkdir })))
+      .rejects.toThrow(`bash-local: working directory ${fileWorkdir} is not a directory`)
+  })
+
   it('caps per-call timeouts at maxTimeoutMs', async () => {
     const { bash } = await setup({ timeoutMs: 1_000, maxTimeoutMs: 2_000 })
     const result = await run(bash, bash.resolve({ command: 'true', timeoutMs: 99_999 }))

@@ -267,6 +267,15 @@ describe('bash tool', () => {
     expect(text(result)).toBe('(no output)')
   })
 
+  it('reports a nonexistent workdir with isError and clear error text instead of spawn ENOENT (Discussions #7379)', async () => {
+    const ctx = await setup()
+    const missing = join(tmpdir(), `missing-workdir-${Date.now()}`)
+    const result = await call(ctx, 'bash', { command: 'pwd', description: 'test command', workdir: missing })
+    expect(result.isError).toBe(true)
+    expect(text(result)).toContain(`bash-local: working directory ${missing} does not exist`)
+    expect(text(result)).not.toContain('spawn bash ENOENT')
+  })
+
   it('marks stderr sections', async () => {
     const ctx = await setup()
     const result = await call(ctx, 'bash', { command: 'echo out; echo err >&2', description: 'test command' })

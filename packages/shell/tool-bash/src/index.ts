@@ -417,7 +417,7 @@ export function apply(ctx: Context, config: Config = {}): void {
             ? 'Timeout in milliseconds. The executor applies its configured default and cap; on expiry the command moves to the background as a job instead of being killed.'
             : 'Timeout in milliseconds. The executor applies its configured default and cap, and kills the command on expiry.',
         },
-        workdir: { type: 'string', description: 'Working directory for this command. Defaults to the session workspace; a relative path is resolved against it.' },
+        workdir: { type: 'string', description: 'Working directory for this command. Must be an existing directory. Defaults to the session workspace; a relative path is resolved against it.' },
         ...background ? {
           run_in_background: { type: 'boolean' as const, description: 'Run in the background and return a job id immediately (collect with job_output, stop with job_kill). No timeout applies.' },
         } : {},
