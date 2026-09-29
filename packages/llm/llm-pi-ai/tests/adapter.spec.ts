@@ -240,6 +240,45 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.paths).toEqual(['/v1/responses'])
   })
 
+  it('dispatches adaptive thinking and output_config effort for custom anthropic-messages models with xhigh (Discussions #7390)', async () => {
+    const server = await mockServer([{ status: 401, body: JSON.stringify({ error: { message: 'expected mock failure' } }) }])
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: {
+        glm: {
+          apiKeyEnv: 'PI_TEST_KEY',
+          api: 'anthropic-messages',
+          baseURL: server.url,
+          models: [{
+            id: 'glm-5.3',
+            name: 'glm-5.3',
+            reasoningEfforts: {
+              low: 'low',
+              medium: 'medium',
+              high: 'high',
+              xhigh: 'xhigh',
+            },
+          }],
+        },
+      },
+    })
+    const result = await assemble(ctx, {
+      provider: 'glm',
+      model: 'glm-5.3',
+      reasoningEffort: ReasoningEffortId('xhigh'),
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: 'hi' }],
+        source: { kind: 'model', provider: 'glm', model: 'glm-5.3' },
+      })],
+    })
+    expect(result.finish.kind).toBe('error')
+    expect(server.paths).toEqual(['/v1/messages?beta=true'])
+    const req = server.requests[0] as { thinking?: { type?: string; display?: string }; output_config?: { effort?: string } }
+    expect(req.thinking).toEqual({ type: 'adaptive', display: 'summarized' })
+    expect(req.output_config).toEqual({ effort: 'xhigh' })
+  })
+
   it('resolves attachment and filesystem services mounted after the adapter when dispatching an image', async () => {
     const server = await mockServer([{ status: 401, body: JSON.stringify({ error: { message: 'expected mock failure' } }) }])
     const attachmentId = AttachmentId(`sha256:${'a'.repeat(64)}`)

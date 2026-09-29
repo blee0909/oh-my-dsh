@@ -760,6 +760,25 @@ function resolveModelReasoning(
 type ModelCompat = OpenAICompletionsCompat | OpenAIResponsesCompat | AnthropicMessagesCompat | BedrockCompat | MistralConversationsCompat
 
 /**
+ * Whether a model declares reasoning effort levels that require Anthropic's
+ * adaptive thinking protocol (xhigh or max). Legacy Anthropic endpoints and
+ * budget-token paths clamp these levels down to high and emit no effort parameter,
+ * silently losing the user's wire mapping.
+ */
+function modelDeclaresExtendedReasoning(
+  entry: PiAiModelProfile,
+  base: Model<Api> | undefined,
+): boolean {
+  if (entry.reasoningEfforts !== undefined) {
+    if (typeof entry.reasoningEfforts === 'object' && entry.reasoningEfforts !== null) {
+      return entry.reasoningEfforts.xhigh !== undefined || entry.reasoningEfforts.max !== undefined
+    }
+    return false
+  }
+  return base?.thinkingLevelMap?.xhigh != null || base?.thinkingLevelMap?.max != null
+}
+
+/**
  * Resolve one model's compat block from the profile's switches.
  *
  * A model switch wins over the route switch field by field; whatever neither
@@ -799,7 +818,6 @@ function resolveModelCompat(
     }
     configured[field] = value
   }
-  if (Object.keys(configured).length === 0) return {}
   // The installed entry's compat matches the entry's OWN api — a route-level
   // `api` repoint (an anthropic catalog served through an OpenAI-compatible
   // gateway) leaves `base.compat` in the other protocol's shape, so it is
@@ -807,6 +825,15 @@ function resolveModelCompat(
   // model starts from pi-ai's baseURL-derived detection instead, which is
   // what a protocol change means for every other compat field too.
   const inherited = base?.api === api ? base.compat : undefined
+  if (api === 'anthropic-messages') {
+    const anthropicInherited = inherited as AnthropicMessagesCompat | undefined
+    if (configured.forceAdaptiveThinking === undefined && anthropicInherited?.forceAdaptiveThinking === undefined) {
+      if (modelDeclaresExtendedReasoning(entry, base)) {
+        configured.forceAdaptiveThinking = true
+      }
+    }
+  }
+  if (Object.keys(configured).length === 0) return {}
   return { compat: { ...inherited, ...configured } as ModelCompat }
 }
 

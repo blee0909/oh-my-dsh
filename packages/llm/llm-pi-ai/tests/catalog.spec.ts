@@ -10,7 +10,7 @@ import type { ContextFormed } from '@deepseek-ai/dsh-llm'
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/event-stream'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
-import type { Api, Model, OpenAICompletionsCompat, Provider } from '@earendil-works/pi-ai'
+import type { AnthropicMessagesCompat, Api, Model, OpenAICompletionsCompat, Provider } from '@earendil-works/pi-ai'
 import { resolveProfiles } from '../src/config.ts'
 import { createModels, createProvider, getSupportedThinkingLevels } from '../src/models.ts'
 import { buildProvider, supportedProtocols } from '../src/provider.ts'
@@ -911,6 +911,114 @@ describe('compat switches', () => {
       supportsTemperature: false,
       supportsCacheControlOnTools: false,
     })
+  })
+
+  it('auto-enables forceAdaptiveThinking for custom anthropic-messages models declaring xhigh reasoning effort (Discussions #7390)', () => {
+    const models = modelsOf({
+      glm: {
+        api: 'anthropic-messages',
+        baseURL: 'https://relay.test',
+        models: [{
+          id: 'glm-5.3',
+          name: 'glm-5.3',
+          reasoningEfforts: {
+            low: 'low',
+            medium: 'medium',
+            high: 'high',
+            xhigh: 'xhigh',
+          },
+        }],
+      },
+    }, 'glm')
+
+    const compat = models.get('glm-5.3')?.compat as AnthropicMessagesCompat | undefined
+    expect(compat?.forceAdaptiveThinking).toBe(true)
+  })
+
+  it('auto-enables forceAdaptiveThinking for custom anthropic-messages models declaring max reasoning effort', () => {
+    const models = modelsOf({
+      'custom-anthropic': {
+        api: 'anthropic-messages',
+        baseURL: 'https://relay.test',
+        models: [{
+          id: 'model-max',
+          reasoningEfforts: { max: 'max' },
+        }],
+      },
+    }, 'custom-anthropic')
+
+    const compat = models.get('model-max')?.compat as AnthropicMessagesCompat | undefined
+    expect(compat?.forceAdaptiveThinking).toBe(true)
+  })
+
+  it('respects model-level explicit forceAdaptiveThinking: false override for anthropic-messages models declaring xhigh', () => {
+    const models = modelsOf({
+      glm: {
+        api: 'anthropic-messages',
+        baseURL: 'https://relay.test',
+        models: [{
+          id: 'glm-5.3',
+          reasoningEfforts: { xhigh: 'xhigh' },
+          compat: { forceAdaptiveThinking: false },
+        }],
+      },
+    }, 'glm')
+
+    const compat = models.get('glm-5.3')?.compat as AnthropicMessagesCompat | undefined
+    expect(compat?.forceAdaptiveThinking).toBe(false)
+  })
+
+  it('respects route-level explicit forceAdaptiveThinking: false override for anthropic-messages models declaring xhigh', () => {
+    const models = modelsOf({
+      glm: {
+        api: 'anthropic-messages',
+        baseURL: 'https://relay.test',
+        compat: { forceAdaptiveThinking: false },
+        models: [{
+          id: 'glm-5.3',
+          reasoningEfforts: { xhigh: 'xhigh' },
+        }],
+      },
+    }, 'glm')
+
+    const compat = models.get('glm-5.3')?.compat as AnthropicMessagesCompat | undefined
+    expect(compat?.forceAdaptiveThinking).toBe(false)
+  })
+
+  it('does not auto-enable forceAdaptiveThinking for anthropic-messages models declaring only standard effort levels', () => {
+    const models = modelsOf({
+      legacy: {
+        api: 'anthropic-messages',
+        baseURL: 'https://relay.test',
+        models: [{
+          id: 'legacy-claude',
+          reasoningEfforts: {
+            low: 'low',
+            medium: 'medium',
+            high: 'high',
+          },
+        }],
+      },
+    }, 'legacy')
+
+    const compat = models.get('legacy-claude')?.compat as AnthropicMessagesCompat | undefined
+    expect(compat?.forceAdaptiveThinking).toBeUndefined()
+  })
+
+  it('does not auto-enable forceAdaptiveThinking for non-anthropic protocols declaring xhigh', () => {
+    const models = modelsOf({
+      'openai-proxy': {
+        api: 'openai-completions',
+        baseURL: 'https://openai.test',
+        models: [{
+          id: 'gpt-5-xhigh',
+          reasoningEfforts: { xhigh: 'xhigh' },
+        }],
+      },
+    }, 'openai-proxy')
+
+    const compat = models.get('gpt-5-xhigh')?.compat as Record<string, unknown> | undefined
+    expect(compat?.forceAdaptiveThinking).toBeUndefined()
   })
 
   it('lands each route switch only on the models whose protocol declares it', () => {
