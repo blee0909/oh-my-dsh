@@ -15,7 +15,7 @@ import koffi from 'koffi'
 import { allocBytes, isNullPtr } from '../src/ffi.ts'
 import type { NativePtr, Win32Bindings } from '../src/ffi.ts'
 import {
-  createRestrictedToken, findLogonSid, makeWellKnownSid, openCurrentProcessToken, restrictTokenIntegrity, setTokenDefaultDaclGrant,
+  createRestrictedToken, ensureDesktopLowIntegrity, findLogonSid, makeWellKnownSid, openCurrentProcessToken, restrictTokenIntegrity, setTokenDefaultDaclGrant,
 } from '../src/token.ts'
 import * as abi from '../src/win32-abi.ts'
 
@@ -490,3 +490,84 @@ describe('createRestrictedToken failure paths', () => {
     expect((caught as Win32Error).api).toBe('CreateRestrictedToken')
   })
 })
+
+describe('ensureDesktopLowIntegrity', () => {
+  it('no-ops when convertStringSecurityDescriptorToSecurityDescriptorW is not available', () => {
+    const api = {} as Win32Bindings
+    expect(() => ensureDesktopLowIntegrity(api)).not.toThrow()
+  })
+
+  it('no-ops when convertStringSecurityDescriptorToSecurityDescriptorW returns 0', () => {
+    const api = {
+      convertStringSecurityDescriptorToSecurityDescriptorW: vi.fn(() => 0),
+    } as unknown as Win32Bindings
+    expect(() => ensureDesktopLowIntegrity(api)).not.toThrow()
+    expect(api.convertStringSecurityDescriptorToSecurityDescriptorW).toHaveBeenCalled()
+  })
+
+  it('sets LABEL_SECURITY_INFORMATION on window station and desktop, then frees descriptor', () => {
+    const fakeDescriptor = 12345n as NativePtr
+    const hwinsta = 200n as NativePtr
+    const hdesk = 300n as NativePtr
+    const localFree = vi.fn()
+    const setUserObjectSecurity = vi.fn((_object: unknown, _info: Buffer, _descriptor: unknown) => 1)
+
+    const api = {
+      convertStringSecurityDescriptorToSecurityDescriptorW: vi.fn((_sddl, _rev, slot) => {
+        koffi.encode(slot, PVOID, fakeDescriptor)
+        return 1
+      }),
+      getProcessWindowStation: vi.fn(() => hwinsta),
+      getCurrentThreadId: vi.fn(() => 42),
+      getThreadDesktop: vi.fn((threadId: number) => {
+        expect(threadId).toBe(42)
+        return hdesk
+      }),
+      setUserObjectSecurity,
+      localFree,
+    } as unknown as Win32Bindings
+
+    ensureDesktopLowIntegrity(api)
+
+    expect(setUserObjectSecurity).toHaveBeenCalledTimes(2)
+    // First call: hwinsta
+    expect(setUserObjectSecurity).toHaveBeenNthCalledWith(
+      1,
+      hwinsta,
+      expect.any(Buffer),
+      fakeDescriptor,
+    )
+    const calls = setUserObjectSecurity.mock.calls as unknown as [unknown, Buffer, unknown][]
+    expect(calls[0]![1].readUInt32LE(0)).toBe(abi.LABEL_SECURITY_INFORMATION)
+
+    // Second call: hdesk
+    expect(setUserObjectSecurity).toHaveBeenNthCalledWith(
+      2,
+      hdesk,
+      expect.any(Buffer),
+      fakeDescriptor,
+    )
+    expect(calls[1]![1].readUInt32LE(0)).toBe(abi.LABEL_SECURITY_INFORMATION)
+
+    expect(localFree).toHaveBeenCalledWith(fakeDescriptor)
+  })
+
+  it('catches and suppresses errors during setUserObjectSecurity, still freeing descriptor', () => {
+    const fakeDescriptor = 54321n as NativePtr
+    const localFree = vi.fn()
+    const api = {
+      convertStringSecurityDescriptorToSecurityDescriptorW: vi.fn((_sddl, _rev, slot) => {
+        koffi.encode(slot, PVOID, fakeDescriptor)
+        return 1
+      }),
+      getProcessWindowStation: vi.fn(() => {
+        throw new Error('Access denied to winsta')
+      }),
+      localFree,
+    } as unknown as Win32Bindings
+
+    expect(() => ensureDesktopLowIntegrity(api)).not.toThrow()
+    expect(localFree).toHaveBeenCalledWith(fakeDescriptor)
+  })
+})
+

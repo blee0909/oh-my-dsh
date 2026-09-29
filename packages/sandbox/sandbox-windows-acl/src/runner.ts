@@ -49,7 +49,8 @@ import { closeSync, existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
 import { win32 } from './ffi.ts'
-import { AclSandbox, assertTempRootOutsideWorkspace } from './index.ts'
+import * as abi from './win32-abi.ts'
+import { AclSandbox, assertTempRootOutsideWorkspace, ensureDesktopLowIntegrity } from './index.ts'
 import { tempWriteSid, workspaceWriteSid } from './workspace-sid.ts'
 
 const RUNNER_SIGNATURE = 'windows-acl-run'
@@ -132,6 +133,10 @@ async function main(): Promise<number> {
   }
 
   const api = await win32()
+  api.setErrorMode(
+    abi.SEM_FAILCRITICALERRORS | abi.SEM_NOGPFAULTERRORBOX | abi.SEM_NOOPENFILEERRORBOX,
+  )
+  ensureDesktopLowIntegrity(api)
   // Ignore this process's own CTRL+C: the confined child (same console) keeps
   // handling its own; the runner must survive to revoke grants and mirror the
   // child's exit code.

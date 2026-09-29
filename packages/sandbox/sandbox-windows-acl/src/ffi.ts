@@ -108,6 +108,17 @@ export interface Win32Bindings extends Win32ProcessBindings {
     bytesHigh: number,
     overlapped: NativePtr,
   ): number
+  setErrorMode(mode: number): number
+  getCurrentThreadId(): number
+  getProcessWindowStation(): NativePtr
+  getThreadDesktop(threadId: number): NativePtr
+  setUserObjectSecurity(object: NativePtr, information: Buffer, descriptor: NativePtr): number
+  convertStringSecurityDescriptorToSecurityDescriptorW(
+    stringSecurityDescriptor: string,
+    revision: number,
+    securityDescriptor: NativePtr,
+    securityDescriptorSize: null,
+  ): number
 }
 
 /**
@@ -274,6 +285,17 @@ function bindings(): Win32Bindings {
     unlockFileEx: bind(kernel32, 'UnlockFileEx', 'int', [
       PVOID, 'uint32', 'uint32', 'uint32', PVOID,
     ]),
+    setErrorMode: bind(kernel32, 'SetErrorMode', 'uint32', ['uint32']),
+    getCurrentThreadId: bind(kernel32, 'GetCurrentThreadId', 'uint32', []),
+    getProcessWindowStation: bind(requireKoffi().load('user32.dll'), 'GetProcessWindowStation', PVOID, []),
+    getThreadDesktop: bind(requireKoffi().load('user32.dll'), 'GetThreadDesktop', PVOID, ['uint32']),
+    setUserObjectSecurity: bind(requireKoffi().load('user32.dll'), 'SetUserObjectSecurity', 'int', [PVOID, PVOID, PVOID]),
+    convertStringSecurityDescriptorToSecurityDescriptorW: bind(
+      advapi32,
+      'ConvertStringSecurityDescriptorToSecurityDescriptorW',
+      'int',
+      ['str16', 'uint32', PPVOID, PVOID],
+    ),
   })) as Win32Bindings
   return cached
 }

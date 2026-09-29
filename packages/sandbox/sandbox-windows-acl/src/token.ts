@@ -164,6 +164,45 @@ export function restrictTokenIntegrity(api: Win32Bindings, token: NativePtr, low
   }
 }
 
+/**
+ * Ensure the current process's window station and desktop have a Low mandatory
+ * integrity label (S:(ML;;NW;;;LW)), so child processes running at Low integrity
+ * can connect to the interactive desktop and window station during early DLL
+ * initialization (kernel32/user32) without failing with STATUS_DLL_INIT_FAILED (0xC0000142).
+ * Fails gracefully (best-effort): if SDDL conversion or handle access fails (e.g. headless),
+ * execution continues.
+ * @param api - the Win32 binding table.
+ */
+export function ensureDesktopLowIntegrity(api: Win32Bindings): void {
+  if (typeof api.convertStringSecurityDescriptorToSecurityDescriptorW !== 'function') return
+  const descriptorSlot = allocPtrSlot()
+  if (api.convertStringSecurityDescriptorToSecurityDescriptorW('S:(ML;;NW;;;LW)', abi.SDDL_REVISION_1, descriptorSlot, null) === 0) {
+    return
+  }
+  const descriptor = decodePtr(descriptorSlot)
+  if (descriptor === null) return
+  try {
+    const info = Buffer.alloc(4)
+    info.writeUInt32LE(abi.LABEL_SECURITY_INFORMATION, 0)
+    if (typeof api.getProcessWindowStation === 'function' && typeof api.setUserObjectSecurity === 'function') {
+      const hwinsta = api.getProcessWindowStation()
+      if (!isNullPtr(hwinsta)) {
+        api.setUserObjectSecurity(hwinsta, info, descriptor)
+      }
+    }
+    if (typeof api.getThreadDesktop === 'function' && typeof api.getCurrentThreadId === 'function' && typeof api.setUserObjectSecurity === 'function') {
+      const hdesk = api.getThreadDesktop(api.getCurrentThreadId())
+      if (!isNullPtr(hdesk)) {
+        api.setUserObjectSecurity(hdesk, info, descriptor)
+      }
+    }
+  } catch {
+    // Best-effort desktop labeling; ignore non-fatal environment access errors
+  } finally {
+    api.localFree(descriptor)
+  }
+}
+
 /** Pack `SID_AND_ATTRIBUTES[count]` (16-byte stride; Attributes stay 0). */
 function buildRestrictingSids(sids: readonly NativePtr[]): Buffer {
   const buffer = Buffer.alloc(abi.SID_AND_ATTRIBUTES_SIZE * sids.length)

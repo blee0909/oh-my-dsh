@@ -52,9 +52,10 @@ import { allocPtrSlot, decodePtr, isNullPtr, throwLastError, win32 } from './ffi
 import type { NativePtr, Win32Bindings } from './ffi.ts'
 import { assertPrivateTempDisjoint } from './path-boundary.ts'
 import { drainPipe, spawnSandboxed, spawnSandboxedInherited, waitForExit } from './spawn.ts'
-import { createRestrictedToken, findLogonSid, makeWellKnownSid, openCurrentProcessToken, restrictTokenIntegrity, setTokenDefaultDaclGrant } from './token.ts'
+import { createRestrictedToken, ensureDesktopLowIntegrity, findLogonSid, makeWellKnownSid, openCurrentProcessToken, restrictTokenIntegrity, setTokenDefaultDaclGrant } from './token.ts'
 import * as abi from './win32-abi.ts'
 
+export { ensureDesktopLowIntegrity } from './token.ts'
 export { AclWriteGrant } from './grant.ts'
 export { assertTempRootOutsideWorkspace } from './path-boundary.ts'
 export { tempWriteSid, workspaceWriteSid } from './workspace-sid.ts'
@@ -288,6 +289,7 @@ export class AclSandbox {
       )
       restrictTokenIntegrity(api, restrictedToken, lowLabelSid)
       this.token = restrictedToken
+      ensureDesktopLowIntegrity(api)
       // The restricted token's default DACL still names only the user's
       // ambient SIDs — none of the restricting SIDs. Every NEW object the
       // confined process creates (anonymous stdio pipes, sync objects) takes

@@ -139,3 +139,13 @@ describe('sameSidAt bounded comparison', () => {
     expect(sameSidAt(left, 0, right, 0)).toBe(false) // the differing prefixes are not a matching SID
   })
 })
+
+describe('win32 abi error mode and sddl constants', () => {
+  it('defines the expected constant values', () => {
+    expect(abi.SDDL_REVISION_1).toBe(1)
+    expect(abi.SEM_FAILCRITICALERRORS).toBe(0x0001)
+    expect(abi.SEM_NOGPFAULTERRORBOX).toBe(0x0002)
+    expect(abi.SEM_NOOPENFILEERRORBOX).toBe(0x8000)
+  })
+})
+

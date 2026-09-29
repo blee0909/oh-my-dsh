@@ -93,6 +93,14 @@ export const MAX_PATH = 260
 export const ERROR_SUCCESS = 0
 /** Win32 error reported when an immediate byte-range lock cannot be obtained. */
 export const ERROR_LOCK_VIOLATION = 33
+/** Revision value required by ConvertStringSecurityDescriptorToSecurityDescriptorW. */
+export const SDDL_REVISION_1 = 1
+/** Suppress critical-error-handler message box (hard error popups). */
+export const SEM_FAILCRITICALERRORS = 0x0001
+/** Suppress Windows Error Reporting dialog box. */
+export const SEM_NOGPFAULTERRORBOX = 0x0002
+/** Suppress OpenFile error message box when file not found. */
+export const SEM_NOOPENFILEERRORBOX = 0x8000
 /** Generic read access bit. */
 export const GENERIC_READ = 0x80000000
 /** Generic write access bit. */
