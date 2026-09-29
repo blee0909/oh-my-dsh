@@ -27,6 +27,20 @@ function pwshAvailable(): boolean {
   return spawnSync(pwshCmd, ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', '$true'], { encoding: 'utf8' }).status === 0
 }
 
+function resolvePythonExe(): string | undefined {
+  for (const candidate of [
+    process.env.PYTHON,
+    'C:\\Users\\shenfeiwin\\AppData\\Roaming\\uv\\python\\cpython-3.12-windows-x86_64-none\\python.exe',
+  ]) {
+    if (candidate && existsSync(candidate)) return candidate
+  }
+  const probe = spawnSync('python', ['-c', 'import sys; print(sys.executable)'], { encoding: 'utf8' })
+  if (probe.status === 0 && probe.stdout.trim()) return probe.stdout.trim()
+  const uvProbe = spawnSync('uv', ['python', 'find'], { encoding: 'utf8' })
+  if (uvProbe.status === 0 && uvProbe.stdout.trim()) return uvProbe.stdout.trim()
+  return undefined
+}
+
 function runRunner(args: string[], timeoutMs = 30_000) {
   return spawnSync(process.execPath, ['--import', 'tsx/esm', runnerEntry, ...args], {
     timeout: timeoutMs,
@@ -663,4 +677,20 @@ TryOpen 'DIRECTORY' '${child}'
       expect(result.stderr).toContain('windows-acl-run: ')
     }
   }, 15_000)
+
+  it('workspace-write: Python tempfile.TemporaryDirectory() and mkdtemp() succeed in granted temp directory via injected compatibility', (ctx) => {
+    const py = resolvePythonExe()
+    if (!py) {
+      ctx.skip()
+      return
+    }
+    const pyCode = "import tempfile, os; t = tempfile.TemporaryDirectory(); f = os.path.join(t.name, 'f.txt'); open(f, 'w').write('ok'); print('FILE-WROTE:', open(f).read()); t.cleanup(); print('CLEANUP: OK')"
+    const result = runRunner([
+      '--workspace', writableDir, '--temp', isolatedTemp, '--mode', 'workspace-write',
+      '--', py, '-c', pyCode,
+    ])
+    expect(result.status, `stderr: ${result.stderr}`).toBe(0)
+    expect(result.stdout).toContain('FILE-WROTE: ok')
+    expect(result.stdout).toContain('CLEANUP: OK')
+  }, 30_000)
 })

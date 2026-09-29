@@ -43,8 +43,8 @@
  * @module @deepseek-ai/dsh-sandbox-windows-acl
  */
 
-import { existsSync, statSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { Win32Error } from '@deepseek-ai/dsh-win32-process'
 
 import { grantWrite, revokeWrite } from './acl.ts'
@@ -59,6 +59,59 @@ export { ensureDesktopLowIntegrity } from './token.ts'
 export { AclWriteGrant } from './grant.ts'
 export { assertTempRootOutsideWorkspace } from './path-boundary.ts'
 export { tempWriteSid, workspaceWriteSid } from './workspace-sid.ts'
+
+/**
+ * Python sitecustomize helper for Windows restricted-token sandboxes.
+ * Under Windows ACL sandbox (workspace-write), CPython's os.mkdir(path, 0o700)
+ * (hardcoded in standard library tempfile.mkdtemp and tempfile.TemporaryDirectory)
+ * explicitly assigns a protected DACL (D:P) naming only OW, SY, BA. This blocks
+ * inheritance of the granted directory's capability ACE and strips all restricting
+ * SIDs, causing PermissionError (WinError 5) on directory scanning, creation,
+ * and rmtree cleanup.
+ *
+ * Mapping 0o700 to 0o755 instructs CPython to pass NULL security attributes to
+ * CreateDirectoryW, allowing the directory to inherit the parent directory's
+ * capability ACE (TempWriteSid / WorkspaceWriteSid) and Low mandatory integrity label.
+ */
+export const PYTHON_COMPAT_SCRIPT = `# Windows ACL sandbox Python compatibility:
+# On Windows under restricted tokens, os.mkdir(path, 0o700) (used by tempfile.mkdtemp
+# and tempfile.TemporaryDirectory) sets a protected DACL with only OW, SY, BA,
+# stripping the capability ACE and denying the restricted token access.
+# Mapping 0o700 to 0o755 passes NULL security attributes to Windows,
+# inheriting the granted directory's capability ACE and Low integrity label.
+import os, sys
+if sys.platform == 'win32':
+    _orig_mkdir = os.mkdir
+    def _safe_mkdir(path, mode=0o777, *args, **kwargs):
+        if mode == 0o700:
+            mode = 0o755
+        return _orig_mkdir(path, mode, *args, **kwargs)
+    os.mkdir = _safe_mkdir
+    this_dir = os.path.abspath(os.path.dirname(__file__))
+    for p in sys.path:
+        if os.path.abspath(p) != this_dir:
+            candidate = os.path.join(p, 'sitecustomize.py')
+            if os.path.isfile(candidate):
+                import importlib.util
+                spec = importlib.util.spec_from_file_location('sitecustomize', candidate)
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)
+                break
+`
+
+/**
+ * Write the Python sandbox compatibility script (sitecustomize.py) into
+ * a dedicated subdirectory inside the session's granted private temp directory.
+ * @param tempDir - the session's granted private temp directory path.
+ * @returns the absolute path of the directory containing sitecustomize.py.
+ */
+export function setupPythonCompat(tempDir: string): string {
+  const pyCompatDir = join(tempDir, 'dsh_py_compat')
+  mkdirSync(pyCompatDir, { recursive: true })
+  writeFileSync(join(pyCompatDir, 'sitecustomize.py'), PYTHON_COMPAT_SCRIPT)
+  return pyCompatDir
+}
 /** Construction options: the workspace/temp allowlists and their distinct SID identities. */
 export interface AclSandboxOptions {
   /** Directories the confined child may write into (must exist and be caller-owned). */

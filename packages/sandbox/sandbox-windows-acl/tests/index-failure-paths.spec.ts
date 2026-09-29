@@ -8,7 +8,7 @@
  * acl.spec.ts and runner.spec.ts (win32 only).
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { Win32Error } from '@deepseek-ai/dsh-win32-process'
@@ -18,7 +18,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import koffi from 'koffi'
 
 import type { NativePtr, Win32Bindings } from '../src/ffi.ts'
-import { AclSandbox } from '../src/index.ts'
+import { AclSandbox, PYTHON_COMPAT_SCRIPT, setupPythonCompat } from '../src/index.ts'
 import * as abi from '../src/win32-abi.ts'
 
 const PVOID = koffi.pointer('void')
@@ -478,5 +478,19 @@ describe('AclSandbox dispose', () => {
     closeHandle.mockImplementation((handle: NativePtr) => (handle === restrictedToken ? 0 : 1))
     await sandbox.init()
     expect(() => { sandbox.dispose() }).toThrow(AggregateError)
+  })
+})
+
+describe('setupPythonCompat', () => {
+  it('creates dsh_py_compat/sitecustomize.py with PYTHON_COMPAT_SCRIPT', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'dsh-test-pycompat-'))
+    try {
+      const pyCompatDir = setupPythonCompat(tempDir)
+      const scriptPath = join(pyCompatDir, 'sitecustomize.py')
+      expect(existsSync(scriptPath)).toBe(true)
+      expect(readFileSync(scriptPath, 'utf8')).toBe(PYTHON_COMPAT_SCRIPT)
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 })

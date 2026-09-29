@@ -50,7 +50,7 @@ import { join } from 'node:path'
 
 import { win32 } from './ffi.ts'
 import * as abi from './win32-abi.ts'
-import { AclSandbox, assertTempRootOutsideWorkspace, ensureDesktopLowIntegrity } from './index.ts'
+import { AclSandbox, assertTempRootOutsideWorkspace, ensureDesktopLowIntegrity, setupPythonCompat } from './index.ts'
 import { tempWriteSid, workspaceWriteSid } from './workspace-sid.ts'
 
 const RUNNER_SIGNATURE = 'windows-acl-run'
@@ -181,6 +181,12 @@ async function main(): Promise<number> {
       }
       if (api.setEnvironmentVariableW('TEMP', privateTempDir) === 0) {
         fail(`SetEnvironmentVariableW TEMP failed (Win32 ${api.getLastError()})`)
+      }
+      const pyCompatDir = setupPythonCompat(privateTempDir)
+      const origPyPath = process.env.PYTHONPATH
+      const pyPath = origPyPath ? `${pyCompatDir};${origPyPath}` : pyCompatDir
+      if (api.setEnvironmentVariableW('PYTHONPATH', pyPath) === 0) {
+        fail(`SetEnvironmentVariableW PYTHONPATH failed (Win32 ${api.getLastError()})`)
       }
     }
 
