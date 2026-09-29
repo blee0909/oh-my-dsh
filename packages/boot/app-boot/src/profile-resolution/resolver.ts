@@ -241,7 +241,8 @@ function profileChild(path: string, treePrefix: string): string {
 }
 
 function nativePackageDir(parent: string, name: string): string | undefined {
-  for (const searchPath of createRequire(parent).resolve.paths(name) as string[]) {
+  const searchPaths = (createRequire(parent).resolve.paths(name) ?? createRequire(parent).resolve.paths('') ?? []) as string[]
+  for (const searchPath of searchPaths) {
     const candidate = join(searchPath, name)
     if (existsSync(join(candidate, 'package.json'))) return candidate
   }
@@ -468,7 +469,8 @@ class ResolutionRouter {
     const target = resolution.entries.get(name)
     const candidates: string[] = []
     const localSearchPaths: string[] = []
-    for (const searchPath of createRequire(parent).resolve.paths(name) as string[]) {
+    const searchPaths = (createRequire(parent).resolve.paths(name) ?? this.nodeModulePaths(dirname(parent))) as string[]
+    for (const searchPath of searchPaths) {
       if (!searchPath.startsWith(layer.localPrefix)) break
       localSearchPaths.push(searchPath)
       const candidate = localPackageCandidate(searchPath, name, flavor)
@@ -521,7 +523,7 @@ class ResolutionRouter {
     if (target === undefined) return { route: { kind: 'native' } }
     const ancestors = this.nodeModulePaths(dirname(parent))
     const ancestorSet = new Set(ancestors)
-    const searchPaths = flavor === 'esm' ? ancestors : createRequire(parent).resolve.paths(name) as string[]
+    const searchPaths = flavor === 'esm' ? ancestors : (createRequire(parent).resolve.paths(name) ?? ancestors) as string[]
     for (const searchPath of searchPaths) {
       const directory = dirname(searchPath)
       if (ancestorSet.has(searchPath) && readPeerNames(directory).has(name)) {

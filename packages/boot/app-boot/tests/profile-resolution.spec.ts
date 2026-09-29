@@ -1807,14 +1807,22 @@ describe('runtime resolution', { concurrent: false }, () => {
     },
   )
 
-  it('excludes profile symlinks to files from linked roots', async () => {
+  it('excludes profile symlinks to files from linked roots', async (ctx) => {
     const f = fixture()
     const modules = join(f.profile.dir, 'node_modules')
     const target = join(f.root, 'work', 'file.cjs')
     file(target, 'module.exports = { marker: 5 }\n')
     mkdirSync(join(modules, '@scope'), { recursive: true })
-    symlinkSync(target, join(modules, 'file-link'), 'file')
-    symlinkSync(target, join(modules, '@scope', 'file-link'), 'file')
+    try {
+      symlinkSync(target, join(modules, 'file-link'), 'file')
+      symlinkSync(target, join(modules, '@scope', 'file-link'), 'file')
+    } catch (error: unknown) {
+      if (process.platform === 'win32' && (error as NodeJS.ErrnoException)?.code === 'EPERM') {
+        ctx.skip()
+        return
+      }
+      throw error
+    }
 
     const resolution = await resolutionOf(f)
     expect(resolution.linkedRoots).toEqual([])
@@ -2534,5 +2542,22 @@ describe('runtime resolution', { concurrent: false }, () => {
     registration.dispose()
     registrations.pop()
     expect(() => { require.resolve('@deepseek-ai/dsh-core') }).toThrow(/Cannot find module/u)
+  })
+
+  it('tolerates module specifiers whose base name returns null from resolve.paths (Discussions #7377)', async () => {
+    const f = fixture()
+    const registration = installRuntimeInterception(await resolutionOf(f))
+    registrations.push(registration)
+    const require = createRequire(join(f.profile.dir, 'entry.cjs'))
+    // Builtin modules with trailing slashes (e.g. 'process/') return null from resolve.paths('process').
+    // Interception must not throw TypeError: createRequire.resolve.paths is not a function or its return value is not iterable.
+    expect(() => {
+      try {
+        require.resolve('process/')
+      } catch (error: unknown) {
+        expect((error as NodeJS.ErrnoException).code).toBe('MODULE_NOT_FOUND')
+        expect((error as Error).message).not.toContain('iterable')
+      }
+    }).not.toThrow(TypeError)
   })
 })

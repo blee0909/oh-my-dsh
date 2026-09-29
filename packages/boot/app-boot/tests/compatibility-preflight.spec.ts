@@ -271,19 +271,26 @@ describe('manifest resolution', () => {
   })
 
   it.each([
-    ['an unreadable manifest', (f: ReturnType<typeof fixture>) => {
+    ['an unreadable manifest', (f: ReturnType<typeof fixture>): boolean => {
       f.plugin('denied-plugin')
       rmSync(join(f.dir, 'node_modules', 'denied-plugin', 'package.json'))
       mkdirSync(join(f.dir, 'node_modules', 'denied-plugin', 'package.json'))
+      return true
     }],
-    ['a module path that loops', (f: ReturnType<typeof fixture>) => {
+    ['a module path that loops', (f: ReturnType<typeof fixture>): boolean => {
       f.plugin('denied-plugin')
-      symlinkSync('loop.mjs', join(f.dir, 'node_modules', 'denied-plugin', 'loop.mjs'))
+      try {
+        symlinkSync('loop.mjs', join(f.dir, 'node_modules', 'denied-plugin', 'loop.mjs'))
+      } catch (error: unknown) {
+        if (process.platform === 'win32' && (error as NodeJS.ErrnoException)?.code === 'EPERM') return false
+        throw error
+      }
+      return true
     }],
-  ])('refuses a row whose %s cannot be read', (_label, prepare) => {
+  ])('refuses a row whose %s cannot be read', (label, prepare) => {
     const f = fixture()
-    prepare(f)
-    const name = _label === 'a module path that loops'
+    if (prepare(f) === false) return
+    const name = label === 'a module path that loops'
       ? './node_modules/denied-plugin/loop.mjs' : './node_modules/denied-plugin/index.mjs'
     const rows = prepareProfileEntries(context(f), [{ id: 'row', name }], pathToFileURL(f.dir).href + '/')
     expect(rows[0]?.disabled).toBe(true)

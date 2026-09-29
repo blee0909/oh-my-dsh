@@ -117,7 +117,8 @@ export class PluginPackages extends Service {
 }
 
 function packageDirFromParent(name: string, parentURL: string): string | undefined {
-  for (const searchPath of createRequire(parentURL).resolve.paths(name) as string[]) {
+  const searchPaths = (createRequire(parentURL).resolve.paths(name) ?? createRequire(parentURL).resolve.paths('') ?? []) as string[]
+  for (const searchPath of searchPaths) {
     const candidate = join(searchPath, name)
     if (existsSync(join(candidate, 'package.json'))) return candidate
   }

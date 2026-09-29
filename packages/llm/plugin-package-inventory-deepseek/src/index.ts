@@ -77,7 +77,8 @@ function barePackageManifest(
     const pkg = packages?.packageOf(packageName, anchor)
     if (pkg !== undefined) return pkg.manifestPath
     if (packages !== undefined) continue
-    for (const searchPath of createRequire(anchor).resolve.paths(packageName) as string[]) {
+    const searchPaths = (createRequire(anchor).resolve.paths(packageName) ?? createRequire(anchor).resolve.paths('') ?? []) as string[]
+    for (const searchPath of searchPaths) {
       const manifest = join(searchPath, packageName, 'package.json')
       if (existsSync(manifest)) return manifest
     }

@@ -35,7 +35,8 @@ function manifestOf(ctx: Context, name: string, parentURL: string): object | und
   const bare = barePackageName(specifier)
   if (bare !== undefined && packages === undefined) {
     // An embedder without the package service falls back to Node's own lookup, as `packageDirFromParent` does.
-    for (const path of createRequire(parentURL).resolve.paths(bare) as string[]) {
+    const paths = (createRequire(parentURL).resolve.paths(bare) ?? createRequire(parentURL).resolve.paths('') ?? []) as string[]
+    for (const path of paths) {
       const filename = join(path, bare, 'package.json')
       if (existsSync(filename)) return readManifest(filename)
     }
