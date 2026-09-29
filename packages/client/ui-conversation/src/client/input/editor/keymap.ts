@@ -6,7 +6,9 @@
  * falls through to those defaults (Shift+Enter's line break, ordinary
  * spaces, text paste the bar routes itself).
  *
- * IME guard: a composition-closing Enter/Space must not submit or adjudicate.
+ * IME guard: a composition-closing Enter/Space must not submit or adjudicate,
+ * and a delete the engine applied to the DOM before its `beforeinput` is
+ * consumed once, so @lexical/plain-text cannot delete a second character.
  * KeyboardEvent.isComposing covers most engines; Safari delivers the closing
  * keydown AFTER compositionend, so a root-element composition watch holds the
  * guard for 10ms more (the old textarea's proven window); keyCode
@@ -16,8 +18,8 @@
  */
 import type { LexicalEditor } from 'lexical'
 import {
-  COMMAND_PRIORITY_CRITICAL, KEY_ARROW_DOWN_COMMAND, KEY_ARROW_UP_COMMAND, KEY_ENTER_COMMAND,
-  KEY_ESCAPE_COMMAND, KEY_SPACE_COMMAND, KEY_TAB_COMMAND, PASTE_COMMAND,
+  BEFORE_INPUT_COMMAND, COMMAND_PRIORITY_CRITICAL, KEY_ARROW_DOWN_COMMAND, KEY_ARROW_UP_COMMAND,
+  KEY_ENTER_COMMAND, KEY_ESCAPE_COMMAND, KEY_SPACE_COMMAND, KEY_TAB_COMMAND, PASTE_COMMAND,
 } from 'lexical'
 import { mergeRegister } from '@lexical/utils'
 import type { ArbitrateKey, ArbitrateOutcome } from '../../contract/draft-editor.ts'
@@ -63,9 +65,10 @@ export function registerComposerKeymap(editor: LexicalEditor, handlers: Composer
   // root element and re-arms on root swaps.
   let composing = false
   let composingUntil = 0
-  let rootElement: HTMLElement | null = null
+  let rootElement: HTMLElement | null = editor.getRootElement()
+  const currentRoot = (): HTMLElement | null => rootElement ?? editor.getRootElement()
   const syncComposition = (): void => {
-    rootElement?.toggleAttribute('data-composer-composing', composing || editor.isComposing())
+    currentRoot()?.toggleAttribute('data-composer-composing', composing || editor.isComposing())
   }
   const onCompositionStart = (): void => {
     composing = true
@@ -79,6 +82,30 @@ export function registerComposerKeymap(editor: LexicalEditor, handlers: Composer
     editor.update(() => {}, { onUpdate: syncComposition })
   }
   const recentlyComposing = (): boolean => composing || Date.now() < composingUntil
+
+  // Windows IMEs (WeType among them) can apply a Backspace deletion to the DOM
+  // *before* dispatching the corresponding `beforeinput`. Lexical's keydown
+  // path then cannot preventDefault the native edit, and @lexical/plain-text's
+  // beforeinput handler deletes a second character — the reported "one
+  // Backspace removes two". Remember the DOM text at the delete keydown; if it
+  // has already shrunk when the delete beforeinput arrives, the native edit is
+  // the one deletion and Lexical must skip its own. Engines that mutate after
+  // beforeinput keep `textContent === before` and are untouched.
+  let deleteKeydownText: string | null = null
+  let deleteKeydownAt = 0
+  const onDeleteKeydown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Backspace' && event.key !== 'Delete') {
+      deleteKeydownText = null
+      return
+    }
+    const root = currentRoot()
+    if (root === null || !(event.target instanceof Node) || !root.contains(event.target)) return
+    deleteKeydownText = root.textContent
+    deleteKeydownAt = Date.now()
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('keydown', onDeleteKeydown, true)
+  }
 
   const arrow = (key: ArbitrateKey) => (event: KeyboardEvent | null): boolean => {
     const inComposition = event !== null && isComposingEvent(event, recentlyComposing)
@@ -104,6 +131,25 @@ export function registerComposerKeymap(editor: LexicalEditor, handlers: Composer
     editor.registerUpdateListener(syncComposition),
     editor.registerCommand(KEY_ARROW_UP_COMMAND, arrow('up'), COMMAND_PRIORITY_CRITICAL),
     editor.registerCommand(KEY_ARROW_DOWN_COMMAND, arrow('down'), COMMAND_PRIORITY_CRITICAL),
+    // The DOM already lost the character before this event (see onDeleteKeydown):
+    // the native/IME edit is the one deletion, so consume the event and let
+    // Lexical skip its own beforeinput delete.
+    editor.registerCommand(BEFORE_INPUT_COMMAND, (event) => {
+      const input = event as InputEvent
+      if (input.inputType !== 'deleteContentBackward' && input.inputType !== 'deleteContentForward') return false
+      const before = deleteKeydownText
+      deleteKeydownText = null
+      const root = currentRoot()
+      if (before === null || root === null || Date.now() - deleteKeydownAt > 250) return false
+      if (root.textContent === before) return false
+      input.preventDefault()
+      return true
+    }, COMMAND_PRIORITY_CRITICAL),
+    () => {
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('keydown', onDeleteKeydown, true)
+      }
+    },
     // Tab settles the highlighted completion and passes without one, keeping
     // native focus traversal; Shift+Tab leaves the menu like Escape whenever it
     // is open, highlight or not, so the two Tab gestures never disagree about

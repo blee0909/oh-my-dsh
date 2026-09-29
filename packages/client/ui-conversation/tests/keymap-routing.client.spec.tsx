@@ -6,7 +6,7 @@
  */
 import { describe, expect, it, onTestFinished, vi } from 'vitest'
 import { fireEvent } from '@testing-library/react'
-import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical'
+import { $createParagraphNode, $createTextNode, $getRoot, BEFORE_INPUT_COMMAND, createEditor } from 'lexical'
 import { registerPlainText } from '@lexical/plain-text'
 import { registerComposerKeymap } from '../src/client/input/editor/keymap.ts'
 
@@ -140,5 +140,91 @@ describe('keymap keydown routing', () => {
     // Shift+Tab is the menu's exit key, never its settle key.
     fireEvent.keyDown(root, { key: 'Tab', keyCode: 9, shiftKey: true })
     expect(arbitrate).toHaveBeenLastCalledWith('tabBack', false)
+  })
+
+  it('allows delete beforeinput when DOM text has not changed before event', () => {
+    const editor = createEditor({ namespace: 'keymap-routing-delete', onError: (e) => { throw e } })
+    const root = document.createElement('div')
+    root.contentEditable = 'true'
+    root.textContent = 'hello'
+    document.body.appendChild(root)
+    editor.setRootElement(root)
+    onTestFinished(() => { editor.setRootElement(null); root.remove() })
+    const unregister = registerComposerKeymap(editor, {
+      arbitrate: () => 'pass', space: () => false, dismissPopup: () => {},
+      canSubmit: () => true, submit: () => {}, intakeFiles: () => {}, pasteText: () => {},
+    })
+    onTestFinished(unregister)
+
+    fireEvent.keyDown(root, { key: 'Backspace' })
+    const beforeInputEvent = new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+      bubbles: true,
+      cancelable: true,
+    })
+    editor.dispatchCommand(BEFORE_INPUT_COMMAND, beforeInputEvent)
+    expect(beforeInputEvent.defaultPrevented).toBe(false)
+  })
+
+  it('prevents duplicate delete when DOM text shrunk before beforeinput (WeType IME guard)', () => {
+    const editor = createEditor({ namespace: 'keymap-routing-delete-wetype', onError: (e) => { throw e } })
+    const root = document.createElement('div')
+    root.contentEditable = 'true'
+    root.textContent = 'hello'
+    document.body.appendChild(root)
+    editor.setRootElement(root)
+    onTestFinished(() => { editor.setRootElement(null); root.remove() })
+    const unregister = registerComposerKeymap(editor, {
+      arbitrate: () => 'pass', space: () => false, dismissPopup: () => {},
+      canSubmit: () => true, submit: () => {}, intakeFiles: () => {}, pasteText: () => {},
+    })
+    onTestFinished(unregister)
+
+    // Backspace scenario
+    fireEvent.keyDown(root, { key: 'Backspace' })
+    root.textContent = 'hell'
+    const beforeInputEvent = new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+      bubbles: true,
+      cancelable: true,
+    })
+    editor.dispatchCommand(BEFORE_INPUT_COMMAND, beforeInputEvent)
+    expect(beforeInputEvent.defaultPrevented).toBe(true)
+
+    // Delete scenario
+    fireEvent.keyDown(root, { key: 'Delete' })
+    root.textContent = 'ell'
+    const forwardDeleteEvent = new InputEvent('beforeinput', {
+      inputType: 'deleteContentForward',
+      bubbles: true,
+      cancelable: true,
+    })
+    editor.dispatchCommand(BEFORE_INPUT_COMMAND, forwardDeleteEvent)
+    expect(forwardDeleteEvent.defaultPrevented).toBe(true)
+  })
+
+  it('removes keydown listener on unregister', () => {
+    const editor = createEditor({ namespace: 'keymap-routing-unregister', onError: (e) => { throw e } })
+    const root = document.createElement('div')
+    root.contentEditable = 'true'
+    root.textContent = 'test'
+    document.body.appendChild(root)
+    editor.setRootElement(root)
+    onTestFinished(() => { editor.setRootElement(null); root.remove() })
+    const unregister = registerComposerKeymap(editor, {
+      arbitrate: () => 'pass', space: () => false, dismissPopup: () => {},
+      canSubmit: () => true, submit: () => {}, intakeFiles: () => {}, pasteText: () => {},
+    })
+    unregister()
+
+    fireEvent.keyDown(root, { key: 'Backspace' })
+    root.textContent = 'tes'
+    const beforeInputEvent = new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+      bubbles: true,
+      cancelable: true,
+    })
+    editor.dispatchCommand(BEFORE_INPUT_COMMAND, beforeInputEvent)
+    expect(beforeInputEvent.defaultPrevented).toBe(false)
   })
 })
