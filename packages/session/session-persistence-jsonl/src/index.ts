@@ -32,7 +32,7 @@ import {
   type SessionAccess, type SessionHandle,
   type SessionHandleReadResult,
   type SessionLocation, type SessionPersistenceCreateOptions,
-  type SessionPersistenceListOptions, type SessionPersistenceOpenOptions,
+  type SessionPersistenceListOptions, type SessionPersistenceListingFault, type SessionPersistenceOpenOptions,
   type SessionPersistenceSnapshot, type SessionPersistenceStatOptions,
   type SessionPersistenceRevision as PersistenceRevision,
 } from '@deepseek-ai/dsh-session-persistence'
@@ -62,6 +62,7 @@ import {
 } from './generation.ts'
 
 export type { JsonlCompression } from './format.ts'
+export type { SessionPersistenceListingFault } from '@deepseek-ai/dsh-session-persistence'
 export { SessionFileLocker, type SessionLockOptions, type LockPayload } from './file-lock.ts'
 
 /**
@@ -486,7 +487,9 @@ class JsonlSessionPersistence extends SessionPersistence {
     // append lands mid-scan is then still in this snapshot (its artifact may
     // predate the scan), so create-to-list visibility never has a hole.
     const pending = [...this.tracker.pendingEntries()]
-    const artifacts = await this.listArtifacts(signal)
+    const artifacts = options?.faultSink !== undefined || options?.onFault !== undefined || options?.strict !== undefined
+      ? await this.listArtifacts(signal, options)
+      : await this.listArtifacts(signal)
     const corpusRevision = artifacts.some(artifact => artifact.sourceVersion < SESSION_FORMAT_VERSION)
       ? await this.historicalCorpusRevision(signal) : undefined
     for (const artifact of artifacts) {
@@ -1061,26 +1064,50 @@ class JsonlSessionPersistence extends SessionPersistence {
 
   private async listArtifacts(
     signal?: AbortSignal,
+    options?: SessionPersistenceListOptions,
   ): Promise<Array<{ header: SessionHeader; path: string; sourceVersion: number }>> {
     signal?.throwIfAborted()
     await this.ensureRootEncoding()
     signal?.throwIfAborted()
     const artifacts: Array<{ header: SessionHeader; path: string; sourceVersion: number }> = []
     const ids = new Set<SessionId>()
+    const reportFault = (fault: SessionPersistenceListingFault): void => {
+      this.ctx.logger.warn(`${this.name}: skipped unreadable session artifact "${fault.path}": ${fault.reason}`)
+      options?.faultSink?.(fault)
+      options?.onFault?.(fault)
+    }
     for (const selected of await this.listGenerations(signal)) {
       signal?.throwIfAborted()
-      let header: SessionHeader | undefined
-      try {
-        header = await this.readGenerationHeader(selected, undefined, signal)
-      } catch (error: unknown) {
-        if (error instanceof SessionFormatUnsupportedError || error instanceof SessionPersistenceCorruptionError) continue
-        throw error
-      }
-      if (header === undefined) {
+      const inspection = await this.inspectGenerationHeader(selected, undefined, signal)
+      if (!inspection.ok) {
+        if (inspection.missing) continue
+        const fault: SessionPersistenceListingFault = {
+          path: selected.sourcePath,
+          error: inspection.error,
+          reason: inspection.reason,
+        }
+        reportFault(fault)
+        if (options?.strict) {
+          throw inspection.error ?? new SessionPersistenceCorruptionError(
+            `session artifact "${selected.sourcePath}" has an unreadable or malformed header: ${inspection.reason}`,
+            { cause: inspection.error ?? new Error(inspection.reason) },
+          )
+        }
         continue
       }
+      const header = inspection.header
       if (ids.has(header.id)) {
-        throw new Error(`duplicate JSONL session id "${header.id}" appears in multiple project directories`)
+        const reason = `duplicate JSONL session id "${header.id}" appears in multiple project directories`
+        const fault: SessionPersistenceListingFault = {
+          path: selected.sourcePath,
+          id: header.id,
+          reason,
+        }
+        reportFault(fault)
+        if (options?.strict) {
+          throw new Error(reason)
+        }
+        continue
       }
       ids.add(header.id)
       artifacts.push({ header, path: selected.sourcePath, sourceVersion: selected.sourceVersion })
@@ -1095,6 +1122,27 @@ class JsonlSessionPersistence extends SessionPersistence {
     expectedId?: SessionId,
     signal?: AbortSignal,
   ): Promise<SessionHeader | undefined> {
+    const inspection = await this.inspectGenerationHeader(selected, expectedId, signal)
+    if (!inspection.ok) {
+      if (inspection.missing) return undefined
+      if (inspection.error instanceof SessionFormatUnsupportedError) throw inspection.error
+      if (inspection.error instanceof SyntaxError) return undefined
+      if (inspection.error instanceof Error) throw inspection.error
+      if (inspection.error !== undefined) throw inspection.error
+      return undefined
+    }
+    return inspection.header
+  }
+
+  /** Classify, read, and validate one selected generation header. */
+  private async inspectGenerationHeader(
+    selected: ResolvedJsonlGeneration,
+    expectedId?: SessionId,
+    signal?: AbortSignal,
+  ): Promise<
+    | { readonly ok: true; readonly header: SessionHeader }
+    | { readonly ok: false; readonly reason: string; readonly error?: unknown; readonly missing?: boolean }
+  > {
     let first: string | undefined
     try {
       first = this.compression === 'zstd'
@@ -1102,24 +1150,31 @@ class JsonlSessionPersistence extends SessionPersistence {
         : await this.readFirstLine(selected.sourcePath, signal)
     } catch (error: unknown) {
       signal?.throwIfAborted()
-      if (isENOENT(error)) return undefined
-      throw error
+      if (isENOENT(error)) return { ok: false, reason: 'file not found', error, missing: true }
+      return { ok: false, reason: error instanceof Error ? error.message : String(error), error }
     }
     signal?.throwIfAborted()
-    if (first === undefined) return undefined
+    if (first === undefined) {
+      return { ok: false, reason: 'session artifact has no complete independently readable header' }
+    }
     let value: unknown
     try {
       value = JSON.parse(first)
-    } catch {
-      return undefined
+    } catch (error: unknown) {
+      return { ok: false, reason: 'session header is not valid JSON', error }
     }
-    assertNoRetiredHeaderFields(value)
+    try {
+      assertNoRetiredHeaderFields(value)
+    } catch (error: unknown) {
+      return { ok: false, reason: error instanceof Error ? error.message : String(error), error }
+    }
     const result = sessionFormatCatalog.readHeader(value)
     if ('storedVersion' in result && result.storedVersion !== selected.sourceVersion) {
-      throw new Error(
+      const error = new Error(
         `session generation filename identifies v${selected.sourceVersion}, `
         + `but its header identifies v${result.storedVersion}`,
       )
+      return { ok: false, reason: error.message, error }
     }
     if (result.status === 'unsupported') {
       const physicalId = String((value as { id?: unknown }).id)
@@ -1128,21 +1183,28 @@ class JsonlSessionPersistence extends SessionPersistence {
       if (result.storedVersion > SESSION_FORMAT_VERSION) {
         reason = sessionFormatVersionRefusal(physicalId, result.storedVersion)
       }
-      throw new SessionFormatUnsupportedError(
+      const error = new SessionFormatUnsupportedError(
         `${reason} (raw log: ${selected.sourcePath})`,
         { kind: 'jsonl', path: selected.sourcePath },
       )
+      return { ok: false, reason, error }
     }
-    if (result.status === 'malformed') return undefined
+    if (result.status === 'malformed') {
+      return { ok: false, reason: result.reason }
+    }
     const header = this.currentHeader(result.header)
-    await this.assertStoredIdentity(
-      selected.sourcePath,
-      selected.sourceVersion,
-      header,
-      expectedId,
-      signal,
-    )
-    return header
+    try {
+      await this.assertStoredIdentity(
+        selected.sourcePath,
+        selected.sourceVersion,
+        header,
+        expectedId,
+        signal,
+      )
+    } catch (error: unknown) {
+      return { ok: false, reason: error instanceof Error ? error.message : String(error), error }
+    }
+    return { ok: true, header }
   }
 
   /** Convert format-catalog string identities to current branded Session metadata. */

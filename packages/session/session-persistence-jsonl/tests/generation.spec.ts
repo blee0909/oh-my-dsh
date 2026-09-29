@@ -1664,7 +1664,7 @@ describe('JSONL immutable generation publication', () => {
     )
 
     expect(linkAttempted).toBe(true)
-    expect(await readFile(request.currentPath, 'utf8')).toBe(line(header(3)) + line(event0))
+    expect(await readFile(request.currentPath, 'utf8')).toBe(line(header(SESSION_FORMAT_VERSION)) + line(event0))
   })
 
   it('honors cancellation before reading a generation', async () => {

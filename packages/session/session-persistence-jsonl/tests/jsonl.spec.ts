@@ -7,7 +7,7 @@ import { dirname, join, relative, resolve } from 'node:path'
 import { scheduler } from 'node:timers/promises'
 import { SESSION_FORMAT_VERSION, SessionLogOffset, SessionSeq, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
-import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
+import type { SessionPersistence, SessionPersistenceListingFault } from '@deepseek-ai/dsh-session-persistence'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import {
   assertNoRetiredHeaderFields, encodeSegment, eventLines, generationLogFilename, generationLogPath,
@@ -516,9 +516,9 @@ describe('JsonlSessionPersistence: stored-format refusals', () => {
   })
   afterEach(async () => { await ctx.fiber.dispose() })
 
-  it('propagates a non-format header failure from stat and list unchanged', async () => {
-    // Only foreign-version refusals are enriched (stat) or skipped (list);
-    // any other header failure stays fail-loud on both paths.
+  it('propagates a non-format header failure from stat and isolates it during list', async () => {
+    // Only foreign-version refusals are enriched (stat); listing isolates
+    // unreadable artifacts with diagnostics instead of aborting the whole root.
     const id = SessionId('retired-policy-header')
     const path = rawLogPath(root, '/work', id)
     await mkdir(dirname(path), { recursive: true })
@@ -532,7 +532,8 @@ describe('JsonlSessionPersistence: stored-format refusals', () => {
     }
     await writeFile(path, `${JSON.stringify(line)}\n`)
     await expect(ctx.sessionPersistence.stat(id)).rejects.toThrow('retired policy baseline fields')
-    await expect(ctx.sessionPersistence.list()).rejects.toThrow('retired policy baseline fields')
+    expect(await ctx.sessionPersistence.list()).toEqual([])
+    await expect(ctx.sessionPersistence.list({ strict: true })).rejects.toThrow('retired policy baseline fields')
   })
 
   it('refuses a structurally foreign future header as unsupported, not corrupt or absent', async () => {
@@ -2622,12 +2623,13 @@ describe('JsonlSessionPersistence: edge cases', () => {
       .toThrow(/retired policy baseline fields/)
   })
 
-  it('list rejects a header whose cwd does not identify its physical log', async () => {
+  it('list isolates a header whose cwd does not identify its physical log', async () => {
     const m = meta('misplaced', '/stored')
     await writeLog(ctx.sessionPersistence, m, oneTurnLog())
     await rewriteHeader(rawLogPath(root, m.cwd, m.id), (header) => { header.cwd = '/elsewhere' })
 
-    await expect(ctx.sessionPersistence.list()).rejects.toThrow(/and cwd identify/)
+    expect(await ctx.sessionPersistence.list()).toEqual([])
+    await expect(ctx.sessionPersistence.list({ strict: true })).rejects.toThrow(/and cwd identify/)
   })
 
   it('accepts an alternate project path only when it identifies the same physical log', async () => {
@@ -2646,7 +2648,7 @@ describe('JsonlSessionPersistence: edge cases', () => {
     expect((await ctx.sessionPersistence.list()).map(s => s.header.id)).toContain(m.id)
   })
 
-  it('list rejects a session header whose id cannot name a storage path', async () => {
+  it('list isolates a session header whose id cannot name a storage path', async () => {
     const dir = join(projectDir(root, undefined), 'invalid-id')
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, generationLogFilename(SESSION_FORMAT_VERSION, 'none')), JSON.stringify({
@@ -2654,10 +2656,11 @@ describe('JsonlSessionPersistence: edge cases', () => {
       isSeeded: false, delegationDepth: 0,
     }) + '\n')
 
-    await expect(ctx.sessionPersistence.list()).rejects.toThrow(/header id cannot name a storage path/)
+    expect(await ctx.sessionPersistence.list()).toEqual([])
+    await expect(ctx.sessionPersistence.list({ strict: true })).rejects.toThrow(/header id cannot name a storage path/)
   })
 
-  it('open and list reject one id materialized in multiple project directories', async () => {
+  it('open rejects and list isolates one id materialized in multiple project directories', async () => {
     const id = SessionId('duplicate')
     for (const cwd of ['/a', '/b']) {
       const m = meta(id, cwd)
@@ -2667,7 +2670,8 @@ describe('JsonlSessionPersistence: edge cases', () => {
     }
 
     await expect(ctx.sessionPersistence.open(id, 'read')).rejects.toThrow(/appears in multiple project directories/)
-    await expect(ctx.sessionPersistence.list()).rejects.toThrow(/appears in multiple project directories/)
+    expect((await ctx.sessionPersistence.list()).map(s => s.header.id)).toEqual(['duplicate'])
+    await expect(ctx.sessionPersistence.list({ strict: true })).rejects.toThrow(/appears in multiple project directories/)
   })
 
   it('create rejects an id already on disk under a different project directory', async () => {
@@ -2751,5 +2755,58 @@ describe('JsonlSessionPersistence: edge cases', () => {
     }, surfaceOp: 'append' }] as unknown as SessionEvent[]
     await writeLog(ctx.sessionPersistence, m, events)
     expect((await readAll(ctx.sessionPersistence, m.id)).events).toEqual(events)
+  })
+
+  describe('Discussion #7392: unreadable log tolerance and skipped session trace', () => {
+    it('isolates unreadable live logs and non-header first frames with diagnostic warnings and faultSink', async () => {
+      const normal = meta('normal-session', '/projectA')
+      await writeLog(ctx.sessionPersistence, normal, oneTurnLog())
+
+      const headerlessId = SessionId('headerless-session')
+      const headerlessPath = rawLogPath(root, '/projectB', headerlessId)
+      await mkdir(sessionDir(root, '/projectB', headerlessId), { recursive: true })
+      await writeFile(headerlessPath, JSON.stringify({
+        type: 'tool/code-dispatch-start',
+        time: 123456,
+        data: { toolName: 'bash' },
+      }) + '\n')
+
+      const warnSpy = vi.spyOn(ctx.logger, 'warn')
+      const faults: SessionPersistenceListingFault[] = []
+
+      const listed = await ctx.sessionPersistence.list({
+        faultSink: fault => faults.push(fault),
+      })
+
+      expect(listed.map(s => s.header.id)).toEqual([normal.id])
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(`skipped unreadable session artifact "${headerlessPath}"`),
+      )
+      expect(faults).toHaveLength(1)
+      expect(faults[0]).toMatchObject({
+        path: headerlessPath,
+        reason: expect.stringMatching(/Session format version|Session header/),
+      })
+    })
+
+    it('faultSink and onFault callbacks receive diagnostics for corrupt and duplicate artifacts', async () => {
+      const normal = meta('good', '/p')
+      await writeLog(ctx.sessionPersistence, normal, oneTurnLog())
+
+      const badId = SessionId('bad-json')
+      const badPath = rawLogPath(root, '/p', badId)
+      await mkdir(sessionDir(root, '/p', badId), { recursive: true })
+      await writeFile(badPath, 'not-valid-json\n')
+
+      const faults: SessionPersistenceListingFault[] = []
+      const listed = await ctx.sessionPersistence.list({
+        onFault: f => faults.push(f),
+      })
+
+      expect(listed.map(s => s.header.id)).toEqual([normal.id])
+      expect(faults).toHaveLength(1)
+      expect(faults[0]?.path).toBe(badPath)
+      expect(faults[0]?.reason).toContain('not valid JSON')
+    })
   })
 })

@@ -100,10 +100,31 @@ export interface SessionPersistenceStatOptions {
   readonly signal?: AbortSignal
 }
 
+/** A diagnostic fault reported for an unreadable or skipped session artifact during listing. */
+export interface SessionPersistenceListingFault {
+  /** Physical path to the unreadable session artifact. */
+  readonly path: string
+  /** Resolved or candidate session ID, if known. */
+  readonly id?: SessionId
+  /** Underlying error, if one was caught. */
+  readonly error?: unknown
+  /** Human-readable explanation of why the artifact was skipped. */
+  readonly reason: string
+}
+
 /** Options for {@link SessionPersistence.list}. */
 export interface SessionPersistenceListOptions {
   /** Optional cancellation for backend listing work. */
   readonly signal?: AbortSignal
+  /** Optional sink for skipped or unreadable session artifacts during listing. */
+  readonly faultSink?: (fault: SessionPersistenceListingFault) => void
+  /** Optional alias for {@link faultSink}. */
+  readonly onFault?: (fault: SessionPersistenceListingFault) => void
+  /**
+   * If true, rethrow unreadable session artifact errors instead of isolating them.
+   * Defaults to false (tolerant listing).
+   */
+  readonly strict?: boolean
 }
 
 declare module '@deepseek-ai/cordis' {
