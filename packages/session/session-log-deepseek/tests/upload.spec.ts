@@ -29,7 +29,6 @@ async function harness(
   id: string,
   seed?: readonly SessionEvent[],
   creation?: Omit<CreateSessionOptions, 'seed'>,
-  config?: SessionLogDeepSeek.Config,
 ): Promise<{
   ctx: Context
   session: Session
@@ -39,7 +38,7 @@ async function harness(
   contexts.push(ctx)
   await ctx.plugin(SessionStore)
   await ctx.plugin(DeepSeekLlmApiExtensionRegistry)
-  const upload = ctx.plugin(SessionLogDeepSeek, { enabled: true, ...config })
+  const upload = ctx.plugin(SessionLogDeepSeek, { enabled: true })
   await upload
   const options = seed === undefined
     ? undefined
@@ -47,7 +46,6 @@ async function harness(
   const session = ctx.sessions.create(SessionId(id), options)
   return { ctx, session, disposeUpload: () => upload.dispose() }
 }
-
 
 function body(text = 'x'.repeat(300)) {
   return { messages: [{ role: 'user', content: text }] }

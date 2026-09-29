@@ -6,7 +6,7 @@
  */
 
 import { Buffer } from 'node:buffer'
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { brandString } from '@deepseek-ai/dsh-brand'
 import type {} from '@deepseek-ai/dsh-deepseek-llm-api-extensions'
@@ -35,29 +35,22 @@ export const name = 'session-log-deepseek'
 /** Services required to resolve sessions and contribute the provider request field. */
 export const inject = ['deepseekLlmApiExtensions', 'sessions']
 
-/** Default maximum serialized JSON bytes per contributed session-log batch (4 MiB). */
-export const DEFAULT_MAX_BATCH_BYTES = 4 * 1024 * 1024
-
 /** Session-log request contribution configuration. */
 export interface Config {
   /** Contribute `dsh_session_log` to official DeepSeek requests. Defaults to `true`. */
-  enabled?: boolean
-
+  enabled: Volatile<boolean>
   /**
    * Largest serialized `dsh_session_log` field, in UTF-8 bytes, that one request carries.
    * A request uploads the longest pending event prefix that fits; later requests continue
    * after its acceptance. Defaults to 8 MiB.
    */
-  maxBytes?: number
-
+  maxBytes: number
 }
 
 /** Validated Session-log request contribution configuration. */
-export const Config: z<Config> = z.object({
-  enabled: z.boolean().default(true),
-
+export const Config = z.object({
+  enabled: z.boolean().default(true).volatile(),
   maxBytes: z.number().step(1).min(1).default(8 * 1024 * 1024),
-
 })
 
 
@@ -183,42 +176,16 @@ export function acceptedThrough(session: Session): SessionSeqCursor {
 }
 
 /**
- * Select an oldest-first prefix of wire events whose serialized JSON UTF-8 byte
- * size does not exceed `maxBytes`. The first event is always admitted to prevent watermark stalls.
- * @param events - chronological wire event candidates.
- * @param maxBytes - maximum cumulative JSON bytes allowed in the batch.
- * @returns prefix of events within the byte budget.
- */
-export function takeBatch(
-  events: readonly DeepSeekSessionLogWireEvent[],
-  maxBytes: number,
-): DeepSeekSessionLogWireEvent[] {
-  const batch: DeepSeekSessionLogWireEvent[] = []
-  let bytes = 0
-  for (const event of events) {
-    const size = Buffer.byteLength(JSON.stringify(event), 'utf8')
-    if (batch.length > 0 && bytes + size > maxBytes) {
-      break
-    }
-    batch.push(event)
-    bytes += size
-  }
-  return batch
-}
-
-/**
- * Register the incremental `dsh_session_log` request contribution when enabled.
+ * Register the incremental request contribution; enablement is read for each request.
  * @param ctx - plugin context carrying Sessions and the DeepSeek request-extension registry.
  * @param config - validated configuration.
  */
 export function apply(ctx: Context, config: Config): void {
-  if (config.enabled !== true) return
-
   // Schemastery validates and fills the defaults before `apply` runs.
-  const { maxBytes } = config as Required<Config>
-
+  const { maxBytes } = config
   ctx.deepseekLlmApiExtensions.register('dsh_session_log', {
     prepare: (request) => {
+      if (!config.enabled.get()) return undefined
       // TODO: Define an explicit wire result for direct or stale-session calls if they become a supported product path.
       if (request.sessionId === undefined) return undefined
       const session = ctx.sessions.get(brandString<SessionId>(request.sessionId))
