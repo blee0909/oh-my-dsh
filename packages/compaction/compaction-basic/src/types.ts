@@ -20,6 +20,10 @@ export interface CompactionPolicyConfig {
   summarizationProvider?: string
   /** Summary model; set together with `summarizationProvider`, or inherit the conversation target. */
   summarizationModel?: string
+  /** Fallback summary provider when the primary route encounters context overflow; set together with `summarizationFallbackModel`. */
+  summarizationFallbackProvider?: string
+  /** Fallback summary model when the primary route encounters context overflow; set together with `summarizationFallbackProvider`. */
+  summarizationFallbackModel?: string
   /** Provider generation cap for summarization. Defaults to the resolved `headroomTokens`; an explicit cap must be positive. */
   maxTokens?: number
   /** Reasoning effort for summarization (e.g. 'off', 'low', 'high'). Defaults to 'off'. */
@@ -57,6 +61,8 @@ interface ResolvedPolicyFields {
   readonly headroomTokens: number
   readonly summarizationProvider: string
   readonly summarizationModel: string
+  readonly summarizationFallbackProvider?: string
+  readonly summarizationFallbackModel?: string
   readonly maxTokens: number
   readonly reasoningEffort?: ReasoningEffortId
   readonly compactionRetries: number

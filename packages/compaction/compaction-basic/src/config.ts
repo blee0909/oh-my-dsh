@@ -30,6 +30,8 @@ const POLICY_CONFIG_KEYS = [
   'retainTokens',
   'summarizationProvider',
   'summarizationModel',
+  'summarizationFallbackProvider',
+  'summarizationFallbackModel',
   'maxTokens',
   'reasoningEffort',
   'compactionRetries',
@@ -102,6 +104,12 @@ export function resolveConfig(config: BasicCompactionConfig = {}): ResolvedConfi
     ...retention,
     summarizationProvider: config.summarizationProvider ?? '',
     summarizationModel: config.summarizationModel ?? '',
+    ...config.summarizationFallbackProvider !== undefined
+      ? {
+        summarizationFallbackProvider: config.summarizationFallbackProvider,
+        summarizationFallbackModel: config.summarizationFallbackModel ?? '',
+      }
+      : {},
     maxTokens,
     ...config.reasoningEffort !== undefined ? { reasoningEffort: ReasoningEffortId(config.reasoningEffort) } : {},
     compactionRetries: config.compactionRetries ?? 1,
@@ -130,6 +138,8 @@ export function resolveTargetPolicy(
   const effectiveEffort = override?.reasoningEffort !== undefined
     ? ReasoningEffortId(override.reasoningEffort)
     : config.reasoningEffort
+  const fallbackProvider = override?.summarizationFallbackProvider ?? config.summarizationFallbackProvider
+  const fallbackModel = override?.summarizationFallbackModel ?? config.summarizationFallbackModel
   return deepFreeze({
     target: { provider: target.provider, model: target.model },
     thresholdRatio: override?.thresholdRatio ?? config.thresholdRatio,
@@ -137,6 +147,12 @@ export function resolveTargetPolicy(
     ...resolveRetention(override ?? {}, inheritedRetention),
     summarizationProvider: override?.summarizationProvider ?? config.summarizationProvider,
     summarizationModel: override?.summarizationModel ?? config.summarizationModel,
+    ...fallbackProvider !== undefined
+      ? {
+        summarizationFallbackProvider: fallbackProvider,
+        summarizationFallbackModel: fallbackModel ?? '',
+      }
+      : {},
     maxTokens: override?.maxTokens ?? config.maxTokens,
     ...effectiveEffort !== undefined ? { reasoningEffort: effectiveEffort } : {},
     compactionRetries: override?.compactionRetries ?? config.compactionRetries,
@@ -216,6 +232,12 @@ export function resolveCompactSpec(
     retainTokens,
     summarizationProvider: policy.summarizationProvider,
     summarizationModel: policy.summarizationModel,
+    ...policy.summarizationFallbackProvider !== undefined
+      ? {
+        summarizationFallbackProvider: policy.summarizationFallbackProvider,
+        summarizationFallbackModel: policy.summarizationFallbackModel,
+      }
+      : {},
     maxTokens: policy.maxTokens,
     ...policy.reasoningEffort !== undefined ? { reasoningEffort: policy.reasoningEffort } : {},
     compactionRetries: policy.compactionRetries,
@@ -309,27 +331,30 @@ function validatePolicy(
     assertNonNegativeInteger(`${name}.maxOverflowRetries`, maxOverflowRetries)
   }
 
-  validateSummarizationPair(config, name)
+  validateSummarizationPair(config, name, 'summarizationProvider', 'summarizationModel')
+  validateSummarizationPair(config, name, 'summarizationFallbackProvider', 'summarizationFallbackModel')
 }
 
 /** Require one scope to omit, clear, or replace the summarization target as a pair. */
 function validateSummarizationPair(
   config: CompactionPolicyConfig | Record<string, unknown>,
   name: string,
+  providerKey: 'summarizationProvider' | 'summarizationFallbackProvider' = 'summarizationProvider',
+  modelKey: 'summarizationModel' | 'summarizationFallbackModel' = 'summarizationModel',
 ): void {
-  const provider = config.summarizationProvider
-  const model = config.summarizationModel
+  const provider = config[providerKey]
+  const model = config[modelKey]
   if (provider !== undefined && typeof provider !== 'string') {
-    throw new Error(`${name}.summarizationProvider must be a string`)
+    throw new Error(`${name}.${providerKey} must be a string`)
   }
   if (model !== undefined && typeof model !== 'string') {
-    throw new Error(`${name}.summarizationModel must be a string`)
+    throw new Error(`${name}.${modelKey} must be a string`)
   }
   if (provider === undefined && model === undefined) return
   if (provider === undefined || model === undefined
     || (provider.length === 0) !== (model.length === 0)) {
     throw new Error(
-      `${name}: summarizationProvider and summarizationModel must be set together `
+      `${name}: ${providerKey} and ${modelKey} must be set together `
       + 'as an empty or non-empty pair',
     )
   }

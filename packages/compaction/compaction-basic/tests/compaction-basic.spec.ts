@@ -2330,3 +2330,123 @@ describe('route-priced image pressure', () => {
     expect(summaryEvent?.data.shadowedTokenCount).toBe(shadowedHeuristic)
   })
 })
+
+describe('Discussions #7423: small-window compaction and fallback recovery', () => {
+  it('bounds summarization replayed prefix within small context window without overflowing', async () => {
+    const ctx = createContext(2_000)
+    let streamMessagesReceived = 0
+    let streamTokensEstimated = 0
+    const mockAdapter = new (class extends LlmAdapter {
+      override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+        return Promise.resolve({
+          provider,
+          id: model,
+          name: model,
+          context: { contextWindow: 2000 },
+        })
+      }
+      override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+        streamMessagesReceived = options.messages.length
+        let totalChars = 0
+        for (const msg of options.messages) {
+          for (const block of msg.content) {
+            if (block.type === 'text') totalChars += block.text.length
+          }
+        }
+        streamTokensEstimated = Math.ceil(totalChars / 4)
+        if (streamTokensEstimated > 2000) {
+          yield {
+            type: 'finish',
+            reason: {
+              kind: 'error',
+              failure: {
+                code: CONTEXT_WINDOW_EXCEEDED_CODE,
+                message: `context overflow (${streamTokensEstimated} > 2000)`,
+              },
+            },
+          }
+          return
+        }
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'text-delta', index: 0, text: '## Primary Request and Intent\n- Done' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      }
+    })()
+    ctx.llm.registerAdapter(['small-routed'], mockAdapter)
+
+    const engine = new BasicCompactionEngine(ctx, {
+      headroomTokens: 200,
+      maxTokens: 300,
+      thresholdRatio: 0.8,
+      summarizationProvider: 'small-routed',
+      summarizationModel: 'small-model',
+      auto: false,
+    })
+
+    const session = conversation(20, 'long message text '.repeat(10))
+    const agentInstance = agent(session, 'small-routed')
+    const result = await engine.compactIfNeeded(agentInstance, 'pressure', SIGNAL)
+
+    expect(result).not.toBeNull()
+    expect(streamTokensEstimated).toBeLessThanOrEqual(2000)
+    expect(streamMessagesReceived).toBeGreaterThan(0)
+    expect(session.snapshotEvents().some(e => e.type === 'compaction/summary')).toBe(true)
+  })
+
+  it('recovers from primary context overflow via summarization fallback provider and model', async () => {
+    const ctx = createContext(2_000)
+    const routesCalled: string[] = []
+    const mockAdapter = new (class extends LlmAdapter {
+      override resolveModel(provider: string, model: string): Promise<LlmResolvedModelInfo> {
+        return Promise.resolve({
+          provider,
+          id: model,
+          name: model,
+          context: { contextWindow: provider === 'big-provider' ? 50_000 : 2_000 },
+        })
+      }
+      override async * stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+        routesCalled.push(`${options.provider}/${options.model}`)
+        if (options.provider === 'overflow-provider') {
+          yield {
+            type: 'finish',
+            reason: {
+              kind: 'error',
+              failure: {
+                code: CONTEXT_WINDOW_EXCEEDED_CODE,
+                message: 'primary context overflow',
+              },
+            },
+          }
+          return
+        }
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'text-delta', index: 0, text: '## Primary Request and Intent\n- Fallback done' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      }
+    })()
+    ctx.llm.registerAdapter(['overflow-provider', 'big-provider'], mockAdapter)
+
+    const engine = new BasicCompactionEngine(ctx, {
+      headroomTokens: 200,
+      maxTokens: 300,
+      thresholdRatio: 0.8,
+      summarizationProvider: 'overflow-provider',
+      summarizationModel: 'overflow-model',
+      summarizationFallbackProvider: 'big-provider',
+      summarizationFallbackModel: 'big-model',
+      auto: false,
+    })
+
+    const session = conversation(20, 'long message text '.repeat(10))
+    const agentInstance = agent(session, 'overflow-provider')
+    const result = await engine.compactIfNeeded(agentInstance, 'pressure', SIGNAL)
+
+    expect(result).not.toBeNull()
+    expect(routesCalled).toContain('overflow-provider/overflow-model')
+    expect(routesCalled).toContain('big-provider/big-model')
+    const summaryEvent = session.snapshotEvents().find(event => event.type === 'compaction/summary')
+    expect(summaryEvent?.data.provider).toBe('big-provider')
+    expect(summaryEvent?.data.model).toBe('big-model')
+  })
+})

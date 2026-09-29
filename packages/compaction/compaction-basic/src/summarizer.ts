@@ -5,7 +5,13 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { contentHasImage, BlockAssembler, LlmError, type ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import {
+  contentHasImage,
+  BlockAssembler,
+  LlmError,
+  CONTEXT_WINDOW_EXCEEDED_CODE,
+  type ReasoningEffortId,
+} from '@deepseek-ai/dsh-llm'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type {
   ContentBlock, FinishReason, GenerateOptions, Message, RequestMessage, TokenUsage, ToolSchema,
@@ -15,6 +21,8 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 interface SummaryConfig {
   readonly summarizationProvider: string
   readonly summarizationModel: string
+  readonly summarizationFallbackProvider?: string
+  readonly summarizationFallbackModel?: string
   readonly maxTokens: number
   readonly reasoningEffort?: ReasoningEffortId
 }
@@ -108,6 +116,110 @@ export type SummaryResult = {
   }
 )
 
+/** Check if an error represents context window overflow or token limit exceeded. */
+function isContextOverflow(error: unknown): boolean {
+  if (error === null || error === undefined || typeof error !== 'object') return false
+  const err = error as { code?: unknown; message?: unknown; failure?: { code?: unknown; message?: unknown } }
+  if (err.code === CONTEXT_WINDOW_EXCEEDED_CODE || err.failure?.code === CONTEXT_WINDOW_EXCEEDED_CODE) return true
+  const msg = String(err.message ?? err.failure?.message ?? '')
+  return msg.includes('context overflow') || msg.includes('CONTEXT_WINDOW_EXCEEDED') || msg.includes('context window exceeded')
+}
+
+/** Approximate token estimation for an individual message. */
+function estimateMessageTokens(msg: Message): number {
+  let chars = 0
+  for (const block of msg.content) {
+    if (block.type === 'text') chars += block.text.length
+  }
+  return Math.max(1, Math.ceil(chars / 4))
+}
+
+/**
+ * Bound the input messages so that their estimated token sum fits within `maxInputTokens`,
+ * preventing the summarization request itself from causing a context window overflow.
+ */
+function boundSummarizationMessages(
+  messages: readonly Message[],
+  maxInputTokens: number,
+): Message[] {
+  if (messages.length === 0) return []
+
+  let totalEstimated = 0
+  for (const msg of messages) {
+    totalEstimated += estimateMessageTokens(msg)
+  }
+  if (totalEstimated <= maxInputTokens) {
+    return [...messages]
+  }
+
+  const systemMsg = messages[0]?.role === 'system' ? messages[0] : undefined
+  const contentMessages = systemMsg ? messages.slice(1) : [...messages]
+
+  const reservedForSystem = systemMsg ? estimateMessageTokens(systemMsg) : 0
+  const remainingBudget = Math.max(50, maxInputTokens - reservedForSystem)
+
+  // First pass: truncate any single individual message block that is excessively huge (> 50% of budget)
+  const maxBlockChars = Math.max(200, Math.floor(remainingBudget * 2))
+  const normalizedMessages = contentMessages.map((msg) => {
+    let modified = false
+    const content = msg.content.map((block) => {
+      if (block.type === 'text' && block.text.length > maxBlockChars) {
+        modified = true
+        const headChars = Math.floor(maxBlockChars * 0.4)
+        const tailChars = Math.floor(maxBlockChars * 0.4)
+        const omitted = block.text.length - headChars - tailChars
+        return {
+          ...block,
+          text: `${block.text.slice(0, headChars)}\n\n[... content truncated (${omitted} chars) for compaction summarization ...]\n\n${block.text.slice(-tailChars)}`,
+        }
+      }
+      return block
+    })
+    return modified ? { ...msg, content } : msg
+  })
+
+  // Second pass: select messages fitting within remainingBudget
+  // Prioritize keeping: 1) any prior checkpoint, 2) the most recent turns
+  const priorCheckpointIdx = normalizedMessages.findIndex(m => (
+    m.role === 'user' && m.content.some(b => b.type === 'text' && b.text.includes(SUMMARY_OPEN_TAG))
+  ))
+
+  const selected: Message[] = []
+  let budgetLeft = remainingBudget
+
+  if (priorCheckpointIdx !== -1) {
+    const priorCheckpoint = normalizedMessages[priorCheckpointIdx]
+    if (priorCheckpoint) {
+      const cost = estimateMessageTokens(priorCheckpoint)
+      if (cost <= budgetLeft) {
+        selected.push(priorCheckpoint)
+        budgetLeft -= cost
+      }
+    }
+  }
+
+  const recentCandidates: Message[] = []
+  for (let i = normalizedMessages.length - 1; i >= 0; i -= 1) {
+    if (i === priorCheckpointIdx) continue
+    const msg = normalizedMessages[i]
+    if (!msg) continue
+    const cost = estimateMessageTokens(msg)
+    if (cost <= budgetLeft) {
+      recentCandidates.push(msg)
+      budgetLeft -= cost
+    } else {
+      break
+    }
+  }
+  recentCandidates.reverse()
+
+  const resultMessages: Message[] = []
+  if (systemMsg) resultMessages.push(systemMsg)
+  resultMessages.push(...selected, ...recentCandidates)
+
+  return resultMessages
+}
+
 /**
  * Run the default cache-reusing `ctx.llm.stream()` summarization call: replay
  * the conversation prefix, then append the compaction instruction as the final
@@ -143,30 +255,86 @@ export async function summarizeWithLlm(
     )
   }
 
-  const assembler = new BlockAssembler()
-  const messages: RequestMessage[] = [
-    ...input.messages,
-    deepFreeze({
-      role: 'user',
-      content: [{ type: 'text', text: COMPACTION_INSTRUCTION }],
-    }),
-  ]
-  const options: GenerateOptions = {
-    provider: target.provider,
-    model: target.model,
-    messages,
-    toolHistory: agent.session.toolHistory(),
-    ...input.tools === undefined ? {} : { tools: [...input.tools] },
-    maxTokens: config.maxTokens,
-    ...config.reasoningEffort !== undefined ? { reasoningEffort: config.reasoningEffort } : {},
-    sessionId: agent.session.id,
-    purpose: 'compaction',
-    ...signal === undefined ? {} : { signal },
-  }
-  for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk)
-  const error = finishError(assembler.finish)
-  if (error !== undefined) throw error
+  const info = typeof ctx.llm?.resolveModelInfo === 'function'
+    ? await ctx.llm.resolveModelInfo(target.provider, target.model, signal).catch(() => undefined)
+    : undefined
+  const contextWindow = info?.context?.contextWindow
+  const inputBudget = contextWindow === undefined
+    ? undefined
+    : Math.max(200, contextWindow - config.maxTokens - Math.min(2000, Math.floor(contextWindow * 0.1)))
 
+  const executeCall = async (
+    callTarget: { provider: string; model: string },
+    callMessages: readonly Message[],
+  ): Promise<{ assembler: BlockAssembler; provider: string; model: string }> => {
+    const assembler = new BlockAssembler()
+    const requestMessages: RequestMessage[] = [
+      ...callMessages,
+      deepFreeze({
+        role: 'user',
+        content: [{ type: 'text', text: COMPACTION_INSTRUCTION }],
+      }),
+    ]
+    const options: GenerateOptions = {
+      provider: callTarget.provider,
+      model: callTarget.model,
+      messages: requestMessages,
+      toolHistory: agent.session.toolHistory?.(),
+      ...input.tools === undefined ? {} : { tools: [...input.tools] },
+      maxTokens: config.maxTokens,
+      ...config.reasoningEffort !== undefined ? { reasoningEffort: config.reasoningEffort } : {},
+      sessionId: agent.session.id,
+      purpose: 'compaction',
+      ...signal === undefined ? {} : { signal },
+    }
+    for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk)
+    const error = finishError(assembler.finish)
+    if (error !== undefined) throw error
+    return { assembler, provider: options.provider, model: options.model }
+  }
+
+  const initialMessages = inputBudget === undefined
+    ? input.messages
+    : boundSummarizationMessages(input.messages, inputBudget)
+
+  let execution: { assembler: BlockAssembler; provider: string; model: string }
+  try {
+    execution = await executeCall(target, initialMessages)
+  } catch (error: unknown) {
+    if (signal?.aborted) throw error
+    const isOverflow = isContextOverflow(error)
+    const fallbackProvider = config.summarizationFallbackProvider
+    const fallbackModel = config.summarizationFallbackModel
+    const hasFallback = Boolean(
+      fallbackProvider
+      && fallbackModel
+      && (target.provider !== fallbackProvider || target.model !== fallbackModel),
+    )
+
+    if (isOverflow && hasFallback && fallbackProvider && fallbackModel) {
+      const fallbackTarget = {
+        provider: fallbackProvider,
+        model: fallbackModel,
+      }
+      ctx.logger?.warn?.(
+        `compaction: summarization route ${target.provider}/${target.model} context overflow; `
+        + `falling back to ${fallbackTarget.provider}/${fallbackTarget.model}`,
+      )
+      execution = await executeCall(fallbackTarget, input.messages)
+    } else if (isOverflow) {
+      ctx.logger?.warn?.(
+        `compaction: summarization route ${target.provider}/${target.model} context overflow; `
+        + 'retrying with defensively bounded input messages',
+      )
+      const reducedBudget = Math.max(100, Math.floor((inputBudget ?? 2000) * 0.5))
+      const reducedMessages = boundSummarizationMessages(input.messages, reducedBudget)
+      execution = await executeCall(target, reducedMessages)
+    } else {
+      throw error
+    }
+  }
+
+  const { assembler, provider, model } = execution
   const rawOutput = assembler.blocks()
   const summary = summaryText(rawOutput)
   if (!summary.some(block => block.text.trim().length > 0)) {
@@ -176,8 +344,8 @@ export async function summarizeWithLlm(
     summary,
     rawOutput,
     llmStreamCall: true,
-    provider: options.provider,
-    model: options.model,
+    provider,
+    model,
     maxTokens: config.maxTokens,
     ...(assembler.usage === undefined ? {} : { usage: assembler.usage }),
   }
