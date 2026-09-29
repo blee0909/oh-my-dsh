@@ -44,7 +44,7 @@ export class RemoteSnapshotStream<Snapshot, Delta> {
 
   /** Start the single consumer; repeated calls are inert. */
   start(): void {
-    if (this.started) return
+    if (this.started || this.disposed) return
     this.started = true
     this.done = this.consume()
   }
@@ -89,6 +89,8 @@ export class RemoteSnapshotStream<Snapshot, Delta> {
       }
     } catch (error) {
       if (!this.disposed) this.options.failed(error)
+    } finally {
+      this.started = false
     }
   }
 }

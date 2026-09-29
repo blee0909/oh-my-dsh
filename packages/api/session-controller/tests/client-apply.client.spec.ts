@@ -198,4 +198,49 @@ describe('Session Controller Client apply', () => {
     await vi.waitFor(() => { expect(baselines(accept)).toBe(2) })
     expect(client.connection.generation.getSnapshot()).toMatchObject({ id: 2 })
   })
+
+  it('refreshes session list and self-heals control stream after a terminal control stream failure', async ({ mock, start }) => {
+    const accept = vi.spyOn(ClientSessions.prototype, 'handleControlFrame')
+    const refresh = vi.spyOn(ClientSessions.prototype, 'refresh')
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { client } = await bench(start)
+    await vi.waitFor(() => { expect(baselines(accept)).toBe(1) })
+
+    // Simulate terminal protocol failure by pushing an invalid second baseline
+    mock.streams.push(CONTROL, BASELINE)
+    await vi.waitFor(() => {
+      expect(logged).toHaveBeenCalledWith(
+        '[session-controller] control stream failed:',
+        expect.objectContaining({ message: 'session control stream emitted more than one opening snapshot' }),
+      )
+    })
+    expect(refresh).toHaveBeenCalled()
+
+    // Reconnecting re-arms and recreates the control stream
+    client.connection.reconnect()
+    await vi.waitFor(() => { expect(baselines(accept)).toBe(2) })
+  })
+
+  it('reconciles session list on window focus and document visibilitychange', async ({ start }) => {
+    const refresh = vi.spyOn(ClientSessions.prototype, 'refresh')
+    const fakeDoc = Object.assign(new EventTarget(), {
+      hidden: false,
+      querySelectorAll: () => [],
+    })
+    const fakeWin = new EventTarget()
+    vi.stubGlobal('document', fakeDoc)
+    vi.stubGlobal('window', fakeWin)
+    try {
+      await bench(start)
+      refresh.mockClear()
+
+      fakeDoc.dispatchEvent(new Event('visibilitychange'))
+      expect(refresh).toHaveBeenCalledTimes(1)
+
+      fakeWin.dispatchEvent(new Event('focus'))
+      expect(refresh).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })
