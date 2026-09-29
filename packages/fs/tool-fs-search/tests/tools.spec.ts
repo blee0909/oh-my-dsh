@@ -409,7 +409,7 @@ describe('workdir derivation and signal forwarding', () => {
     const spec = subprocess.spawns[0]
     // --no-config keeps a host RIPGREP_CONFIG_PATH from injecting a
     // preprocessor into this unconfined spawn.
-    expect(spec?.argv).toEqual([rgPath, '--no-config', '--json', '--regexp=needle'])
+    expect(spec?.argv).toEqual([rgPath, '--no-config', '--follow', '--json', '--regexp=needle'])
     expect(spec?.stdio.stdin).toBe('ignore')
     // stdout gets the tool's parse budget; stderr is a diagnostic excerpt;
     // both are the seam's diagnostic-tail shape (no spill files requested).
@@ -752,7 +752,7 @@ describe('glob results', () => {
     subprocess.handler = () => runResult('sub/a.ts\n')
     const result = await call(ctx, 'glob', { pattern: '*.ts', path: 'sub' })
     expect(result.isError).toBe(false)
-    expect(subprocess.spawns[0]?.argv).toEqual([rgPath, '--no-config', '--files', '--glob=*.ts', '--sort=modified', '--no-ignore', '--hidden',
+    expect(subprocess.spawns[0]?.argv).toEqual([rgPath, '--no-config', '--follow', '--files', '--glob=*.ts', '--sort=modified', '--no-ignore', '--hidden',
       '--glob=!**/.git', '--glob=!**/.git/**',
       '--glob=!**/.svn', '--glob=!**/.svn/**',
       '--glob=!**/.hg', '--glob=!**/.hg/**',

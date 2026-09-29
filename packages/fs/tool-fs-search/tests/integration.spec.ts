@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync } from 'node:fs'
+import { existsSync, symlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -88,6 +88,20 @@ describe('search tools over the real subprocess service + the packaged rg', () =
       expect(text(result).split('\n').sort()).toEqual([join('src', 'alpha.ts'), join('src', 'beta.ts')])
     })
 
+    it('follows symlinked directories during traversal (Discussions #7380)', async () => {
+      const externalDir = await mkdtemp(join(tmpdir(), 'dsh-search-symlink-'))
+      try {
+        await writeFile(join(externalDir, 'symlinked-file.ts'), 'export const sym = 42\n')
+        const link = join(dir, 'linked-src')
+        symlinkSync(externalDir, link, 'junction')
+        const result = await call('glob', { pattern: '**/symlinked-file.ts' }, agent())
+        expect(result.isError).toBe(false)
+        expect(text(result)).toContain(join('linked-src', 'symlinked-file.ts'))
+      } finally {
+        await rm(externalDir, { recursive: true, force: true })
+      }
+    })
+
     it('reports zero discoveries as No files found', async () => {
       expect(text(await call('glob', { pattern: '*.nomatch' }, agent()))).toBe('No files found')
     })
@@ -156,6 +170,21 @@ describe('search tools over the real subprocess service + the packaged rg', () =
       const result = await call('grep', { pattern: 'x', path: 'no-such-dir' })
       expect(result.isError).toBe(true)
       expect(result.error).toMatchObject({ info: { code: 'SEARCH_FAILED' } })
+    })
+
+    it('follows symlinked directories during traversal (Discussions #7380)', async () => {
+      const externalDir = await mkdtemp(join(tmpdir(), 'dsh-grep-symlink-'))
+      try {
+        await writeFile(join(externalDir, 'symlinked-data.ts'), 'export const symGrep = "found-needle-7380"\n')
+        const link = join(dir, 'linked-grep-src')
+        symlinkSync(externalDir, link, 'junction')
+        const result = await call('grep', { pattern: 'found-needle-7380' }, agent())
+        expect(result.isError).toBe(false)
+        expect(text(result)).toContain('found-needle-7380')
+        expect(text(result)).toContain(join('linked-grep-src', 'symlinked-data.ts'))
+      } finally {
+        await rm(externalDir, { recursive: true, force: true })
+      }
     })
   })
 
