@@ -53,4 +53,31 @@ describe('launchDetachedApp watch window', () => {
       vi.useRealTimers()
     }
   })
+
+  it('scrubs ambient ELECTRON_RUN_AS_NODE from launched child environment (Discussion #8316)', async () => {
+    process.env.ELECTRON_RUN_AS_NODE = '1'
+    process.env.electron_run_as_node = '1'
+    const child = new ChildProcess()
+    vi.spyOn(child, 'unref')
+    vi.mocked(spawn).mockReturnValueOnce(child)
+    try {
+      const launched = launchDetachedApp('test-code-editor', ['--new-window'], { watchMs: 50 })
+      expect(spawn).toHaveBeenCalledWith(
+        'test-code-editor',
+        ['--new-window'],
+        expect.objectContaining({
+          env: expect.not.objectContaining({
+            ELECTRON_RUN_AS_NODE: expect.anything(),
+            electron_run_as_node: expect.anything(),
+          }),
+        }),
+      )
+      child.emit('exit', 0, null)
+      await expect(launched).resolves.toBeUndefined()
+    } finally {
+      delete process.env.ELECTRON_RUN_AS_NODE
+      delete process.env.electron_run_as_node
+      child.removeAllListeners()
+    }
+  })
 })

@@ -12,6 +12,9 @@ import type { Duplex, Readable, Writable } from 'node:stream'
 /** Namespace prefix reserved for DeepSeek Harness-managed child environment facts. */
 export const DSH_ENV_PREFIX = 'DSH_' as const
 
+/** Namespace prefix reserved for Electron host environment variables that must not leak to children. */
+export const ELECTRON_ENV_PREFIX = 'ELECTRON_' as const
+
 /** One environment key inside the managed {@link DSH_ENV_PREFIX} namespace. */
 export type DshEnvironmentKey = `${typeof DSH_ENV_PREFIX}${string}`
 
