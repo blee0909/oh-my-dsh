@@ -124,7 +124,9 @@ export class ToolCallRecovery {
       case 'assistant/message':
         for (const block of event.data.message.content) {
           if (block.type === 'tool-call') {
-            this.pendingCalls.set(block.id, { turn: event.data.turn, step: event.data.step })
+            if (typeof block.id === 'string' && block.id.length > 0) {
+              this.pendingCalls.set(block.id, { turn: event.data.turn, step: event.data.step })
+            }
           }
         }
         break
@@ -164,6 +166,7 @@ export class ToolCallRecovery {
     // Close calls before their step: providers reject dangling assistant calls,
     // and Map insertion order preserves their transcript order.
     for (const [callId, { turn, step, callSeq }] of this.pendingCalls) {
+      if (!callId || typeof callId !== 'string' || callId.length === 0) continue
       const started = callSeq !== undefined
       const message: ToolResultMessage = deepFreeze({
         id: brandString<MessageId>(`${this.cause.kind}-tool-result-${callId}-${seq}`),

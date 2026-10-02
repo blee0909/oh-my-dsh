@@ -69,7 +69,7 @@ export class BlockAssembler {
       case 'tool-call-delta': {
         const partial = this.ensure(chunk.index, 'tool-call')
         if (partial.block) return // closed by block-end; ignore stragglers
-        partial.toolCallId = chunk.id
+        if (chunk.id && chunk.id.length > 0) partial.toolCallId = chunk.id
         if (chunk.name) partial.toolCallName = chunk.name
         partial.toolCallArguments += chunk.argumentsDelta
         return
@@ -105,16 +105,27 @@ export class BlockAssembler {
     return partial
   }
 
+  private durableToolCallBlock(block: ContentBlock, index: number): ContentBlock {
+    if (block.type === 'tool-call' && (typeof block.id !== 'string' || block.id.length === 0)) {
+      return { ...block, id: brandString<ToolCallId>(`call-${index}`) }
+    }
+    return block
+  }
+
   private assemble(partial: PartialBlock, index: number): ContentBlock {
-    if (partial.block) return partial.block
+    if (partial.block) return this.durableToolCallBlock(partial.block, index)
     switch (partial.blockType) {
       case 'text': return { type: 'text', text: partial.text }
       case 'reasoning': return { type: 'reasoning', text: partial.text }
-      case 'tool-call': return {
-        type: 'tool-call',
-        id: partial.toolCallId ?? brandString<ToolCallId>(`call-${index}`),
-        name: partial.toolCallName ?? '',
-        arguments: partial.toolCallArguments,
+      case 'tool-call': {
+        const rawId = partial.toolCallId
+        const id = rawId !== undefined && rawId.length > 0 ? rawId : brandString<ToolCallId>(`call-${index}`)
+        return {
+          type: 'tool-call',
+          id,
+          name: partial.toolCallName ?? '',
+          arguments: partial.toolCallArguments,
+        }
       }
       default: throw new Error(`cannot assemble incomplete block of type "${partial.blockType}"`)
     }
