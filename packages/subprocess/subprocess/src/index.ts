@@ -183,3 +183,32 @@ export class SubprocessExecutableNotFoundError extends Error {
     this.name = 'SubprocessExecutableNotFoundError'
   }
 }
+
+/**
+ * Scoped foreground process-group signalling is unsupported by the host or platform substrate.
+ * Callers should terminate the terminal session instead of attempting to signal individual foreground jobs.
+ */
+export class SubprocessForegroundSignallingUnsupportedError extends Error {
+  /**
+   * @param message - diagnostic explanation.
+   * @param options - optional error options.
+   */
+  constructor(
+    message = 'scoped foreground process-group signalling is unsupported on this platform; terminate the terminal session instead',
+    options?: ErrorOptions,
+  ) {
+    super(message, options)
+    this.name = 'SubprocessForegroundSignallingUnsupportedError'
+  }
+}
+
+/**
+ * Determine whether an error represents an unsupported scoped foreground signalling attempt.
+ * @param error - candidate error or unknown throw value.
+ * @returns true if the error indicates unsupported foreground signalling.
+ */
+export function isForegroundSignallingUnsupported(error: unknown): error is SubprocessForegroundSignallingUnsupportedError {
+  return error instanceof SubprocessForegroundSignallingUnsupportedError
+    || (error instanceof Error && error.name === 'SubprocessForegroundSignallingUnsupportedError')
+    || (error instanceof Error && error.message.includes('scoped foreground process-group signalling is unsupported'))
+}

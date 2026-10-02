@@ -4,6 +4,9 @@ import { Buffer } from 'node:buffer'
 import { constants } from 'node:os'
 import { PassThrough } from 'node:stream'
 import type { IDisposable, IPty } from 'node-pty'
+import {
+  SubprocessForegroundSignallingUnsupportedError,
+} from '@deepseek-ai/dsh-subprocess'
 import type {
   SubprocessOutcome,
   SubprocessTerminalActivity,
@@ -195,25 +198,17 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
 
   async signalForeground(signal: SubprocessTerminalSignal): Promise<number> {
     this.shellActivity?.invalidate()
+    if (this.platform === 'win32') {
+      throw new SubprocessForegroundSignallingUnsupportedError(
+        'scoped foreground process-group signalling is unsupported on Windows; terminate the terminal session instead',
+      )
+    }
     const foreground = await this.inspectForeground()
     if (foreground === undefined) {
       throw new Error(`cannot resolve foreground process group for terminal ${this.pid}`)
     }
     if (signal === 'SIGKILL' && foreground.processGroupId === this.pid) {
       throw new Error('refusing to SIGKILL the terminal shell; terminate the terminal session instead')
-    }
-    if (this.platform === 'win32') {
-      if (signal === 'SIGINT') {
-        // Windows has no process-group signalling: a `\x03` input write is the
-        // Ctrl-C delivery path conhost turns into a console-wide CTRL_C event
-        // for attached processes. node-pty's signal kills throw on Windows, so
-        // no signal ever reaches the inspector.
-        this.terminal.write('\x03')
-        return foreground.processGroupId
-      }
-      if (signal === 'SIGTSTP' || signal === 'SIGHUP') {
-        throw new Error(`signal ${signal} is unsupported on Windows; only SIGINT, SIGTERM, and SIGKILL are available`)
-      }
     }
     this.inspector.signalGroup(foreground.processGroupId, signal)
     return foreground.processGroupId

@@ -3,6 +3,7 @@
 import { Buffer } from 'node:buffer'
 import type { IDisposable, Terminal as HeadlessTerminalType } from '@xterm/headless'
 import { createLazyRequire } from '@deepseek-ai/dsh-lazy-require'
+import { isForegroundSignallingUnsupported } from '@deepseek-ai/dsh-subprocess'
 import type {
   SubprocessOutcome,
   SubprocessTerminalForeground,
@@ -758,7 +759,13 @@ export class LocalPtySession implements TerminalBackendSession {
       if (activeWrite !== undefined && !await activeWrite) return
       await this.terminal.signalForeground('SIGINT')
     } catch (error: unknown) {
-      if (this.active === operation && !this.closing) this.onTransportFailure(error)
+      if (this.active === operation && !this.closing) {
+        if (isForegroundSignallingUnsupported(error)) {
+          void this.close('cancellation: foreground signalling unsupported').catch(() => {})
+          return
+        }
+        this.onTransportFailure(error)
+      }
       return
     } finally {
       if (this.interrupting === operation) this.interrupting = undefined

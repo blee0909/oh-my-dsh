@@ -9,7 +9,11 @@ import type {
   ProcessSnapshot,
 } from '@deepseek-ai/dsh-subprocess-local/src/process-inspector.ts'
 import type { BoundProcessOwner } from '@deepseek-ai/dsh-subprocess-local/src/managed-owner.ts'
-import type { SubprocessTerminalActivity, SubprocessTerminalSignal } from '@deepseek-ai/dsh-subprocess'
+import {
+  SubprocessForegroundSignallingUnsupportedError,
+  type SubprocessTerminalActivity,
+  type SubprocessTerminalSignal,
+} from '@deepseek-ai/dsh-subprocess'
 
 class FakePty {
   pid = 123
@@ -723,36 +727,35 @@ describe('LocalTerminalHandle', () => {
 describe('LocalTerminalHandle on Windows', () => {
   const win32 = 'win32' as NodeJS.Platform
 
-  it('delivers SIGINT as a Ctrl-C input write without inspector signalling', async () => {
+  it('reports scoped foreground signalling unsupported on Windows for SIGINT without PTY write or inspector signalling', async () => {
     const pty = new FakePty()
     const inspector = new FakeInspector()
     const handle = new LocalTerminalHandle(pty.asPty(), inspector, 10, win32)
-    await expect(handle.signalForeground('SIGINT')).resolves.toBe(456)
-    expect(pty.writes).toEqual(['\x03'])
+    await expect(handle.signalForeground('SIGINT')).rejects.toThrow(SubprocessForegroundSignallingUnsupportedError)
+    expect(pty.writes).toEqual([])
     expect(inspector.groups).toEqual([])
   })
 
-  it('rejects SIGTSTP and SIGHUP as unavailable on Windows', async () => {
+  it('reports scoped foreground signalling unsupported on Windows for SIGTSTP and SIGHUP', async () => {
     const handle = new LocalTerminalHandle(new FakePty().asPty(), new FakeInspector(), 10, win32)
-    await expect(handle.signalForeground('SIGTSTP')).rejects.toThrow('unsupported on Windows')
-    await expect(handle.signalForeground('SIGHUP')).rejects.toThrow('unsupported on Windows')
+    await expect(handle.signalForeground('SIGTSTP')).rejects.toThrow(SubprocessForegroundSignallingUnsupportedError)
+    await expect(handle.signalForeground('SIGHUP')).rejects.toThrow(SubprocessForegroundSignallingUnsupportedError)
   })
 
-  it('routes SIGTERM through the inspector tree with the pseudo foreground group', async () => {
+  it('reports scoped foreground signalling unsupported on Windows for SIGTERM without inspector signalling', async () => {
     const pty = new FakePty()
     const inspector = new FakeInspector()
     const handle = new LocalTerminalHandle(pty.asPty(), inspector, 10, win32)
-    await expect(handle.signalForeground('SIGTERM')).resolves.toBe(456)
-    expect(inspector.groups).toEqual([[456, 'SIGTERM']])
+    await expect(handle.signalForeground('SIGTERM')).rejects.toThrow(SubprocessForegroundSignallingUnsupportedError)
+    expect(inspector.groups).toEqual([])
     expect(pty.writes).toEqual([])
   })
 
-  it('still refuses to SIGKILL the terminal shell on Windows', async () => {
+  it('reports scoped foreground signalling unsupported on Windows for SIGKILL', async () => {
     const pty = new FakePty()
     const inspector = new FakeInspector()
     const handle = new LocalTerminalHandle(pty.asPty(), inspector, 10, win32)
-    inspector.pgid = handle.pid
-    await expect(handle.signalForeground('SIGKILL')).rejects.toThrow('terminate the terminal session')
+    await expect(handle.signalForeground('SIGKILL')).rejects.toThrow(SubprocessForegroundSignallingUnsupportedError)
   })
 
   it('escalates the shell through taskkill tiers instead of node-pty signal kills', async () => {

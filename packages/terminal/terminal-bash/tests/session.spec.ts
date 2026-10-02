@@ -3,10 +3,11 @@ import { PassThrough } from 'node:stream'
 import { LocalPtySession } from '@deepseek-ai/dsh-terminal-bash/src/session.ts'
 import type { ResolvedConfig } from '@deepseek-ai/dsh-terminal-bash/src/config.ts'
 import type { TerminalSendOperation, TerminalSessionStatus, TerminalSignal } from '@deepseek-ai/dsh-terminal'
-import type {
-  SubprocessOutcome,
-  SubprocessTerminalHandle,
-  SubprocessTerminalSignal,
+import {
+  SubprocessForegroundSignallingUnsupportedError,
+  type SubprocessOutcome,
+  type SubprocessTerminalHandle,
+  type SubprocessTerminalSignal,
 } from '@deepseek-ai/dsh-subprocess'
 import { TerminalError } from '@deepseek-ai/dsh-terminal'
 import type {
@@ -1721,6 +1722,51 @@ describe('LocalPtySession bounds, signals, and teardown', () => {
     termination.resolve(undefined)
     await closing
     expect((await operation.done).waitReason).toBe('session_exit')
+  })
+
+  it('closes session and settles active send as session_exit when cancellation encounters unsupported foreground signalling', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    const session = new LocalPtySession(terminal, config())
+    await initialize(session, terminal)
+
+    terminal.signalForeground = async () => {
+      throw new SubprocessForegroundSignallingUnsupportedError('scoped foreground process-group signalling is unsupported on Windows')
+    }
+
+    const controller = new AbortController()
+    const operation = session.startSend({ text: 'run command', submit: true, signal: controller.signal })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    controller.abort()
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect((await operation.done).waitReason).toBe('session_exit')
+    expect(session.status().kind).toBe('exited')
+  })
+
+  it('propagates cleanup failure when cancellation encounters unsupported foreground signalling and terminate rejects', async () => {
+    vi.useFakeTimers()
+    const terminal = new FakeTerminal()
+    terminal.terminateError = new Error('terminal termination failed')
+    const session = new LocalPtySession(terminal, config())
+    await initialize(session, terminal)
+
+    terminal.signalForeground = async () => {
+      throw new SubprocessForegroundSignallingUnsupportedError('scoped foreground process-group signalling is unsupported on Windows')
+    }
+
+    const controller = new AbortController()
+    const operation = session.startSend({ text: 'run command', submit: true, signal: controller.signal })
+    await Promise.resolve()
+    await Promise.resolve()
+
+    controller.abort()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    await expect(operation.done).rejects.toThrow('PTY cleanup failed (cancellation: foreground signalling unsupported)')
   })
 
 })
