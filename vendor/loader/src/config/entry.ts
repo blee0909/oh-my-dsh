@@ -52,6 +52,8 @@ export class Entry {
 
   public ctx: Context
   public fiber?: Fiber
+  /** Raw import result before export normalization; HMR updates it after a successful reload. */
+  public moduleNamespace: unknown
   public parent!: EntryGroup
   // safety: call `entry.update()` immediately after creating an entry
   public options = {} as EntryOptions
@@ -249,9 +251,9 @@ export class Entry {
   }
 
   private async _init() {
-    let exports: any
+    let moduleNamespace: unknown
     try {
-      exports = await this.parent.tree.import(this.options.name, this.getOuterStack)
+      moduleNamespace = await this.parent.tree.import(this.options.name, this.getOuterStack)
     } catch (error) {
       if (this.ctx.fiber.uid === null) return
       this.context.emit('loader/entry-failed', this.options, error)
@@ -266,11 +268,12 @@ export class Entry {
       this._initTask = undefined
     }
     if (this.ctx.fiber.uid === null) return
-    const plugin = this.loader.unwrapExports(exports)
+    const plugin = this.loader.unwrapExports(moduleNamespace)
     this._patchContext([])
     this.loader.showLog(this, 'apply')
     try {
       this.fiber = this.ctx.registry.plugin(plugin, this.options.config, this.getOuterStack).ctx.fiber
+      this.moduleNamespace = moduleNamespace
       await this.fiber?.await()
     } catch (error) {
       if (this.ctx.fiber.uid === null || (error as any)?.code === 'INACTIVE_EFFECT') return
