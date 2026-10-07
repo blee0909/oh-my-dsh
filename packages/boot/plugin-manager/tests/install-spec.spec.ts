@@ -27,6 +27,9 @@ describe('parseInstallSpec', () => {
       expect(parseInstallSpec(spec)).toEqual({ kind: 'git', spec, host })
     }
     expect(parseInstallSpec('https://cdn.example.com/x/y/z/dsh-x-1.0.0.tgz')).toEqual({ kind: 'tarball', spec: 'https://cdn.example.com/x/y/z/dsh-x-1.0.0.tgz', host: 'cdn.example.com' })
+    expect(parseInstallSpec('https://cdn.example.com/plugin.tgz?token=probe')).toEqual({ kind: 'tarball', spec: 'https://cdn.example.com/plugin.tgz?token=probe', host: 'cdn.example.com' })
+    expect(parseInstallSpec('https://cdn.example.com/packages/plugin.tgz?token=probe')).toEqual({ kind: 'tarball', spec: 'https://cdn.example.com/packages/plugin.tgz?token=probe', host: 'cdn.example.com' })
+    expect(parseInstallSpec('https://cdn.example.com/x/y/plugin.tar.gz?token=probe&download=1#archive')).toEqual({ kind: 'tarball', spec: 'https://cdn.example.com/x/y/plugin.tar.gz?token=probe&download=1#archive', host: 'cdn.example.com' })
   })
 
   it('refuses what neither the registry nor pnpm would take, naming why', () => {

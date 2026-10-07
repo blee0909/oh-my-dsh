@@ -27,7 +27,7 @@ const GIT_SHORTHAND_HOSTS: Readonly<Record<string, string>> = {
   github: 'github.com', gitlab: 'gitlab.com', bitbucket: 'bitbucket.org', gist: 'gist.github.com',
 }
 /** A tarball, on disk or over HTTP. */
-const TARBALL_SPEC = /\.(?:tgz|tar\.gz)(?:#.*)?$/i
+const TARBALL_SPEC = /\.(?:tgz|tar\.gz)(?:\?[^#]*)?(?:#.*)?$/i
 /** An npm package name: lowercase URL-safe segments, an optional scope, no leading dot or underscore. */
 const PACKAGE_NAME = /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*$/
 const PACKAGE_NAME_MAX_LENGTH = 214
