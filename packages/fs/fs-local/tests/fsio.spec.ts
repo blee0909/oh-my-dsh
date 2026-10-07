@@ -953,8 +953,16 @@ describe('applyLiteralEdit', () => {
     expect(() => applyLiteralEdit('a a a', 'a', 'X', false, 'f')).toThrow(expect.objectContaining({ code: 'FS_AMBIGUOUS_EDIT' }))
   })
 
+  it('rejects overlapping matches without replaceAll (Discussions #8978)', () => {
+    expect(() => applyLiteralEdit('item\nitem\nitem\n', 'item\nitem\n', 'X', false, 'f'))
+      .toThrow(expect.objectContaining({ code: 'FS_AMBIGUOUS_EDIT' }))
+    expect(() => applyLiteralEdit('aaa', 'aa', 'X', false, 'f'))
+      .toThrow(expect.objectContaining({ code: 'FS_AMBIGUOUS_EDIT' }))
+  })
+
   it('replaces all matches with replaceAll', () => {
     expect(applyLiteralEdit('a a a', 'a', 'X', true, 'f')).toEqual({ content: 'X X X', replacements: 3 })
+    expect(applyLiteralEdit('aaa', 'aa', 'X', true, 'f')).toEqual({ content: 'Xa', replacements: 1 })
   })
 
   it('matches across normalized line endings', () => {

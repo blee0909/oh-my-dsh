@@ -584,6 +584,8 @@ async function throwGuardedCreateFailure(
  * @param createIfAbsent - when provided, publish with a hard-link no-replace
  * primitive; a concurrent creator's file is preserved and this write is
  * rejected with `FS_NOT_OBSERVED` using the supplied display path.
+ * @param replaceIfVersion - when provided, revalidate the target's version right before
+ * publication; a concurrent modification or deletion rejects this write/edit with `FS_STALE_VERSION`.
  */
 export async function writeFileAtomic(
   absolutePath: string,
@@ -592,6 +594,7 @@ export async function writeFileAtomic(
   signal: AbortSignal | undefined,
   internals: FsIoInternals = {},
   createIfAbsent?: { displayPath: string },
+  replaceIfVersion?: { expectedVersion: FsVersion; displayPath: string; verb?: 'write' | 'edit' },
 ): Promise<void> {
   throwIfAborted(signal, 'write')
   const directory = dirname(absolutePath)
@@ -630,6 +633,18 @@ export async function writeFileAtomic(
     handle = undefined
 
     throwIfAborted(signal, 'write')
+    if (replaceIfVersion !== undefined) {
+      const current = await probe(absolutePath)
+      if (current === null || current.version !== replaceIfVersion.expectedVersion) {
+        const verb = replaceIfVersion.verb ?? 'write'
+        throw new FsError(
+          current === null
+            ? `cannot ${verb} "${replaceIfVersion.displayPath}": file no longer exists`
+            : `cannot ${verb} "${replaceIfVersion.displayPath}": file changed since it was read`,
+          'FS_STALE_VERSION',
+        )
+      }
+    }
     if (createIfAbsent !== undefined) {
       try {
         await linkFile(tempPath, absolutePath)
@@ -703,14 +718,14 @@ function restoreLineEndings(content: string, lineEndings: LineEndings): string {
   return lineEndings === 'LF' ? content : normalizeLineEndings(content).split('\n').join('\r\n')
 }
 
-function countOccurrences(content: string, needle: string): number {
+function countOccurrences(content: string, needle: string, overlapping = false): number {
   let count = 0
   let index = 0
   while (true) {
     const found = content.indexOf(needle, index)
     if (found === -1) return count
     count += 1
-    index = found + needle.length
+    index = found + (overlapping ? 1 : needle.length)
   }
 }
 
@@ -823,12 +838,19 @@ export function applyLiteralEdit(
     throw new FsError('old_string must be a non-empty string', 'FS_EDIT_NOT_FOUND')
   }
   const newNorm = normalizeLineEndings(newString)
-  const replacements = countOccurrences(content, oldNorm)
+  if (!replaceAll) {
+    const candidateStarts = countOccurrences(content, oldNorm, true)
+    if (candidateStarts === 0) {
+      throw new FsError(`old_string was not found in "${displayPath}"`, 'FS_EDIT_NOT_FOUND')
+    }
+    if (candidateStarts > 1) {
+      throw new FsError(`old_string matched ${candidateStarts} times in "${displayPath}"; provide a more specific old_string or set replace_all to true`, 'FS_AMBIGUOUS_EDIT')
+    }
+    return { content: content.split(oldNorm).join(newNorm), replacements: 1 }
+  }
+  const replacements = countOccurrences(content, oldNorm, false)
   if (replacements === 0) {
     throw new FsError(`old_string was not found in "${displayPath}"`, 'FS_EDIT_NOT_FOUND')
-  }
-  if (!replaceAll && replacements > 1) {
-    throw new FsError(`old_string matched ${replacements} times in "${displayPath}"; provide a more specific old_string or set replace_all to true`, 'FS_AMBIGUOUS_EDIT')
   }
   return { content: content.split(oldNorm).join(newNorm), replacements }
 }

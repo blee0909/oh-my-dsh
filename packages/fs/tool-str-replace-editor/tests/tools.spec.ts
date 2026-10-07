@@ -660,4 +660,20 @@ describe('tool-str-replace-editor', () => {
       ToolStrReplaceEditor.apply(new Context(), { description: ' ' })
     }).toThrow('description must be non-empty')
   })
+
+  it('rejects overlapping old_str occurrences as ambiguous edit (Discussions #8978)', async () => {
+    const { ctx, root, owner } = await setup()
+    const path = join(root, 'overlap.txt')
+    await writeFile(path, 'item\nitem\nitem\n')
+
+    const replace = await call(ctx, owner, {
+      command: 'str_replace',
+      path,
+      old_str: 'item\nitem\n',
+      new_str: 'changed\n',
+    })
+    expect(replace.isError).toBe(true)
+    expect(text(replace)).toContain('Multiple occurrences of old_str')
+    expect(await readFile(path, 'utf8')).toBe('item\nitem\nitem\n')
+  })
 })

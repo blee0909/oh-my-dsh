@@ -48,7 +48,7 @@ function matchOffsets(content: string, search: string): number[] {
     const match = content.indexOf(search, offset)
     if (match < 0) return offsets
     offsets.push(match)
-    offset = match + search.length
+    offset = match + 1
   }
 }
 

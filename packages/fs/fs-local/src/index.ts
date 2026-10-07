@@ -245,6 +245,9 @@ export class LocalFileSystem extends FileSystem {
         signal,
         this.internals,
         expected?.kind === 'createIfAbsent' ? { displayPath: target.displayPath } : undefined,
+        expected?.kind === 'replaceIfVersion'
+          ? { expectedVersion: expected.version, displayPath: target.displayPath, verb: 'write' }
+          : undefined,
       )
       const after = await probe(target.targetKey)
       return {
@@ -282,7 +285,15 @@ export class LocalFileSystem extends FileSystem {
       const original = await readForEdit(target.targetKey, target.displayPath, signal)
       const edited = applyLiteralEdit(original.content, edit.oldString, edit.newString, edit.replaceAll, target.displayPath)
       const content = restoreLineEndings(edited.content, original.lineEndings)
-      await writeFileAtomic(target.targetKey, content, existing.mode, signal, this.internals)
+      await writeFileAtomic(
+        target.targetKey,
+        content,
+        existing.mode,
+        signal,
+        this.internals,
+        undefined,
+        expected ? { expectedVersion: expected.version, displayPath: target.displayPath, verb: 'edit' } : undefined,
+      )
 
       const after = await probe(target.targetKey)
       return {
