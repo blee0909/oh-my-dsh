@@ -35,6 +35,15 @@ import type { SessionWriteLease } from './lease.ts'
 /** Maximum intentional wait before a routed live session batch starts writing. */
 export const LIVE_WRITE_BATCH_MAX_DELAY_MS = 200
 
+/** High watermark on live buffered event count to trigger an immediate flush and prevent RAM bloat (#8066). */
+export const LIVE_WRITE_BUFFER_HIGH_WATERMARK = 100
+
+/** Base retry delay in milliseconds when a background live batch drain fails (#8066). */
+export const LIVE_WRITE_RETRY_BASE_MS = 1000
+
+/** Maximum exponential backoff retry delay in milliseconds (#8066). */
+export const LIVE_WRITE_RETRY_MAX_MS = 5000
+
 /** The file-storage primitives the handle drives on its owning service. */
 export interface JsonlHandleStorage {
   /** Append encoded lines; `isMaterialized` selects create-vs-extend publication. */
@@ -89,9 +98,12 @@ export class JsonlSessionHandle implements SessionHandle {
   /** Routed live events awaiting their batching deadline (persistence-owned copies). */
   private buffered: SessionEvent[] = []
   private batchTimer: ReturnType<typeof setTimeout> | undefined
-  /** Set when a drain failed; the automatic timer stays quiet until the next drain. */
+  /** Set when a drain failed; indicates background retry backoff is active (#8066). */
   private drainPaused = false
+  private retryBackoffMs = 0
+  private lastReportFailure?: ((error: unknown) => void) | undefined
   private draining: Promise<void> | undefined
+
 
   constructor(
     private readonly storage: JsonlHandleStorage,
@@ -222,6 +234,10 @@ export class JsonlSessionHandle implements SessionHandle {
    */
   close(): Promise<void> {
     return this.closing ??= (async () => {
+      if (this.batchTimer !== undefined) {
+        clearTimeout(this.batchTimer)
+        this.batchTimer = undefined
+      }
       let drainFailure: unknown
       // Producers on other fibers may still publish while close waits for
       // in-flight mutations (root disposal is concurrent), so drain again
@@ -272,7 +288,17 @@ export class JsonlSessionHandle implements SessionHandle {
    *   (the events stay buffered; the next {@link drainLive} retries loudly).
    */
   enqueueLive(event: SessionEvent, reportBackgroundFailure: (error: unknown) => void): void {
+    this.lastReportFailure = reportBackgroundFailure
     this.buffered.push(structuredClone(event))
+    // High watermark defense (#8066): flush immediately if buffer exceeds watermark and not paused
+    if (this.buffered.length >= LIVE_WRITE_BUFFER_HIGH_WATERMARK && !this.drainPaused) {
+      if (this.batchTimer !== undefined) {
+        clearTimeout(this.batchTimer)
+        this.batchTimer = undefined
+      }
+      this.drainLive().catch(reportBackgroundFailure)
+      return
+    }
     if (this.batchTimer !== undefined || this.drainPaused) return
     this.batchTimer = setTimeout(() => {
       this.batchTimer = undefined
@@ -306,14 +332,33 @@ export class JsonlSessionHandle implements SessionHandle {
         const batch = this.buffered.splice(0)
         try {
           await this.persistContiguous(materializeAppendBatch(batch))
+          this.retryBackoffMs = 0
         } catch (error: unknown) {
           this.buffered = batch.concat(this.buffered)
           this.drainPaused = true
+          this.scheduleDrainRetry(this.lastReportFailure)
           throw error
         }
       })
     }
   }
+
+  /** Schedule exponential backoff retry for failed live batch drain to prevent perpetual buffer retention (#8066). */
+  private scheduleDrainRetry(reportFailure?: (error: unknown) => void): void {
+    if (this.closing !== undefined) return
+    if (this.batchTimer !== undefined) {
+      clearTimeout(this.batchTimer)
+    }
+    const delay = this.retryBackoffMs === 0 ? LIVE_WRITE_RETRY_BASE_MS : Math.min(this.retryBackoffMs * 2, LIVE_WRITE_RETRY_MAX_MS)
+    this.retryBackoffMs = delay
+    this.batchTimer = setTimeout(() => {
+      this.batchTimer = undefined
+      this.drainLive().catch((err) => {
+        reportFailure?.(err)
+      })
+    }, delay)
+  }
+
 
   /** The shared durable-append body: contiguity, ownership, torn-tail repair, storage write, state advance. */
   private async persistContiguous(batch: readonly SessionEvent[]): Promise<void> {

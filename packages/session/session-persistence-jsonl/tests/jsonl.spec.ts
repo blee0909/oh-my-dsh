@@ -18,8 +18,14 @@ import {
   runPersistenceContract, meta, oneTurnLog, releasedV1OneTurnLog,
 } from '../../session-persistence/tests/contract.ts'
 import { runLiveWritePathContract } from '../../session-persistence/tests/live-write-contract.ts'
-import { LIVE_WRITE_BATCH_MAX_DELAY_MS, type JsonlSessionHandle } from '../src/storage.ts'
+import {
+  LIVE_WRITE_BATCH_MAX_DELAY_MS,
+  LIVE_WRITE_BUFFER_HIGH_WATERMARK,
+  LIVE_WRITE_RETRY_BASE_MS,
+  type JsonlSessionHandle,
+} from '../src/storage.ts'
 import { JsonlGenerationSourceChangedError } from '../src/generation.ts'
+
 import SessionStore from '@deepseek-ai/dsh-session'
 
 const statRace = vi.hoisted(() => ({
@@ -2807,6 +2813,70 @@ describe('JsonlSessionPersistence: edge cases', () => {
       expect(faults).toHaveLength(1)
       expect(faults[0]?.path).toBe(badPath)
       expect(faults[0]?.reason).toContain('not valid JSON')
+    })
+  })
+
+  describe('Live Write Buffer Defenses & Memory Leak Mitigation (#8066)', () => {
+    it('schedules retry backoff and recovers queued buffer after a transient disk failure', async () => {
+      const m = meta('transient-fail-recovery', '/work')
+      const handle = (await ctx.sessionPersistence.create(m)) as JsonlSessionHandle
+      const service = ctx.sessionPersistence as unknown as {
+        persistBatch: (...args: [SessionHeader, readonly SessionEvent[], boolean, SessionLogOffset]) => Promise<void>
+      }
+      const original = service.persistBatch.bind(service)
+      let shouldFail = true
+      vi.spyOn(service, 'persistBatch').mockImplementation(async (...args) => {
+        if (shouldFail) {
+          throw new Error('EIO simulated failure')
+        }
+        return original(...args)
+      })
+
+      const [start, ...rest] = oneTurnLog()
+      let reportedError: unknown
+      handle.enqueueLive(start!, (err) => { reportedError = err })
+
+      // Wait for initial batch delay to fail
+      await new Promise(r => setTimeout(r, LIVE_WRITE_BATCH_MAX_DELAY_MS + 50))
+      expect(reportedError).toBeInstanceOf(Error)
+      expect((handle as unknown as { drainPaused: boolean }).drainPaused).toBe(true)
+      expect((handle as unknown as { buffered: unknown[] }).buffered.length).toBeGreaterThan(0)
+
+      // Disk recovers
+      shouldFail = false
+
+      // Enqueue next events while in drainPaused retry mode
+      for (const event of rest) {
+        handle.enqueueLive(event, () => {})
+      }
+
+      // Wait for retry backoff timer to fire and recover
+      await new Promise(r => setTimeout(r, LIVE_WRITE_RETRY_BASE_MS + 100))
+      expect((handle as unknown as { drainPaused: boolean }).drainPaused).toBe(false)
+      expect((handle as unknown as { buffered: unknown[] }).buffered).toHaveLength(0)
+
+      await handle.close()
+    })
+
+    it('triggers immediate flush when buffer reaches high watermark without waiting for batch delay', async () => {
+      const m = meta('high-watermark-flush', '/work')
+      const handle = (await ctx.sessionPersistence.create(m)) as JsonlSessionHandle
+      const [start] = oneTurnLog()
+
+      // Enqueue events up to high watermark
+      for (let i = 0; i < LIVE_WRITE_BUFFER_HIGH_WATERMARK; i++) {
+        const evt: SessionEvent = {
+          ...start!,
+          seq: SessionSeq(i),
+        }
+        handle.enqueueLive(evt, () => {})
+      }
+
+      // Immediately (or next tick), the high watermark flush should have kicked off drainLive
+      await new Promise(r => setTimeout(r, 20))
+      expect((handle as unknown as { buffered: unknown[] }).buffered).toHaveLength(0)
+
+      await handle.close()
     })
   })
 })
