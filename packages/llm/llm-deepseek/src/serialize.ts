@@ -12,10 +12,14 @@ function unsupported(type: string): never {
   throw new LlmError(`DeepSeek Messages cannot represent ${type}`, 'UNSUPPORTED_CONTENT')
 }
 
+function cleanText(text: string): string {
+  return text.isWellFormed() ? text : text.toWellFormed()
+}
+
 /** Historical arguments that Messages cannot represent use empty input; durable content stays unchanged. */
 function toolInput(raw: string): Record<string, unknown> {
   let value: unknown
-  try { value = JSON.parse(raw) } catch (_invalidToolHistoryJson) {
+  try { value = JSON.parse(cleanText(raw)) } catch (_invalidToolHistoryJson) {
     return {}
   }
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -27,9 +31,9 @@ function assistant(message: Message, model: string, onReplayDegrade?: (reason: s
   const replay = readReplay(message, model, onReplayDegrade)
   return message.content.map((block, index): WireBlock => {
     switch (block.type) {
-      case 'text': return { type: 'text', text: block.text }
+      case 'text': return { type: 'text', text: cleanText(block.text) }
       case 'reasoning': return {
-        type: 'thinking', thinking: block.text,
+        type: 'thinking', thinking: cleanText(block.text),
         ...replay?.[index]?.signature === undefined ? {} : { signature: replay[index].signature },
       }
       case 'tool-call': return { type: 'tool_use', id: block.id, name: block.name, input: toolInput(block.arguments) }
@@ -62,7 +66,7 @@ export function serialize(
   const model = connection.models.find(entry => entry.id === options.model)
   const inHistory = model?.systemPromptUpdate === 'in-history'
   const input = (blocks: readonly ContentBlock[]): WireInput[] => blocks.flatMap((block): WireInput[] => {
-    if (block.type === 'text') return block.text ? [{ type: 'text', text: block.text }] : []
+    if (block.type === 'text') return block.text ? [{ type: 'text', text: cleanText(block.text) }] : []
     if (block.type === 'reasoning' || block.type === 'tool-call') return []
     if (block.type !== 'image') return unsupported(`user/tool-result content ${block.type}`)
     const version = images.get(block.attachment.attachmentId)
@@ -70,7 +74,7 @@ export function serialize(
     const fileId = fileIds?.get(block.attachment.attachmentId)
     if (fileIds !== undefined && fileId === undefined) throw new LlmError('DeepSeek Messages request file id is missing', 'INVALID_REQUEST')
     return [
-      { type: 'text', text: requestImageHandleText(block.attachment, version, access(block.attachment)) },
+      { type: 'text', text: cleanText(requestImageHandleText(block.attachment, version, access(block.attachment))) },
       fileId === undefined
         ? { type: 'image', source: { type: 'base64', media_type: version.mediaType, data: Buffer.from(version.data).toString('base64') } }
         : { type: 'image', source: { type: 'file', file_id: fileId } },
@@ -90,7 +94,7 @@ export function serialize(
     if (message.role === 'developer') {
       const content = message.content.flatMap((block): WireBlock[] => {
         switch (block.type) {
-          case 'text': return block.text.length === 0 ? [] : [{ type: 'text', text: block.text }]
+          case 'text': return block.text.length === 0 ? [] : [{ type: 'text', text: cleanText(block.text) }]
           case 'tool-addition': return [{ type: 'tool_addition', tool: { type: 'tool_reference', name: block.toolName } }]
           case 'tool-removal': return [{ type: 'tool_removal', tool: { type: 'tool_reference', name: block.toolName } }]
           default: return unsupported(`developer content ${block.type}`)
@@ -105,7 +109,7 @@ export function serialize(
     if (message.role === 'system') {
       const texts = message.content.filter(block => block.type === 'text')
       if (texts.length !== message.content.length) return unsupported('non-text system message')
-      const text = texts.map(block => block.text).join('')
+      const text = cleanText(texts.map(block => block.text).join(''))
       if (inHistory && messages.length > 0) {
         if (text.length === 0) return unsupported('empty in-history system update')
         systemUpdates.push({ role: 'system', content: [{ type: 'text', text }] })
@@ -149,7 +153,7 @@ export function serialize(
   if (!['off', 'low', 'high', 'max'].includes(effort) || (connection.defaults.thinking === 'disabled' && effort !== 'off')) {
     throw new LlmError(`DeepSeek Messages does not support reasoning effort ${effort}`, 'UNSUPPORTED_REASONING_EFFORT')
   }
-  const system = [options.system, historySystem].filter(Boolean).join('\n\n')
+  const system = cleanText([options.system, historySystem].filter(Boolean).join('\n\n'))
   return {
     model: options.model, stream: true, messages,
     max_tokens: options.maxTokens ?? model?.maxTokens ?? connection.maxTokens,
@@ -161,10 +165,11 @@ export function serialize(
     ...options.tools === undefined ? {} : {
       tools: options.tools.map(tool => ({
         name: tool.name,
-        description: tool.description,
+        description: cleanText(tool.description),
         input_schema: tool.parameters,
         ...tool.deferLoading === true ? { defer_loading: true as const } : {},
       })),
     },
   }
+
 }

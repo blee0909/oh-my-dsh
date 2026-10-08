@@ -5,13 +5,16 @@ import {
   createToolResultMessage,
   createUserMessage,
 } from '../src/message.ts'
+import type { ToolResultMessage } from '../src/message.ts'
 import { ToolCallId } from '../src/brand.ts'
+import type { ContentBlock, ReasoningBlock, TextBlock } from '../src/types.ts'
 import {
   HEAD_CHARS,
   MAX_TOOL_OUTPUT_CHARS,
   TAIL_CHARS,
   transformMessages,
 } from '../src/transform.ts'
+
 
 describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
   describe('Reasoning-Only & Empty Content Defenses (#5466)', () => {
@@ -103,8 +106,8 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
       expect(transformed[0]!.role).toBe('user')
       expect(transformed[1]!.role).toBe('assistant')
       expect(transformed[2]!.role).toBe('tool')
-      expect((transformed[2] as any).toolCallId).toBe('call_orphan_1')
-      expect((transformed[2] as any).isError).toBe(true)
+      expect((transformed[2] as ToolResultMessage).toolCallId).toBe('call_orphan_1')
+      expect((transformed[2] as ToolResultMessage).isError).toBe(true)
 
       const followUpUserMsg = transformed[3]!
       expect(followUpUserMsg.role).toBe('user')
@@ -137,22 +140,22 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
       const transformed = transformMessages([assistantMultiCall, call2Result, commentaryUser])
 
       // Must have healed the missing call_1 and call_3 without duplicating call_2
-      const toolResults = transformed.filter(m => m.role === 'tool')
+      const toolResults = transformed.filter((m): m is ToolResultMessage => m.role === 'tool')
       expect(toolResults).toHaveLength(3)
 
-      const answeredIds = toolResults.map(m => (m as any).toolCallId)
+      const answeredIds = toolResults.map(m => m.toolCallId)
       expect(answeredIds).toContain('call_1')
       expect(answeredIds).toContain('call_2')
       expect(answeredIds).toContain('call_3')
 
-      const call2 = toolResults.find(m => (m as any).toolCallId === 'call_2')
-      expect((call2 as any).isError).toBe(false)
+      const call2 = toolResults.find(m => m.toolCallId === 'call_2')
+      expect(call2?.isError).toBe(false)
 
-      const call1 = toolResults.find(m => (m as any).toolCallId === 'call_1')
-      expect((call1 as any).isError).toBe(true)
+      const call1 = toolResults.find(m => m.toolCallId === 'call_1')
+      expect(call1?.isError).toBe(true)
 
-      const call3 = toolResults.find(m => (m as any).toolCallId === 'call_3')
-      expect((call3 as any).isError).toBe(true)
+      const call3 = toolResults.find(m => m.toolCallId === 'call_3')
+      expect(call3?.isError).toBe(true)
 
       // Total messages: assistant -> 3 tool results -> user commentary
       expect(transformed).toHaveLength(5)
@@ -175,10 +178,11 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
       expect(transformed[0]!.role).toBe('assistant')
       expect(transformed[1]!.role).toBe('tool')
 
-      const tailResult = transformed[1]!
-      expect((tailResult as any).toolCallId).toBe('call_tail_1')
-      expect((tailResult as any).isError).toBe(true)
+      const tailResult = transformed[1]! as ToolResultMessage
+      expect(tailResult.toolCallId).toBe('call_tail_1')
+      expect(tailResult.isError).toBe(true)
     })
+
   })
 
   describe('Turn Alternation Coalescer & Provider Invariants', () => {
@@ -243,7 +247,7 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
           type: 'tool-result',
           toolCallId: ToolCallId('call_lost_1'),
           content: [{ type: 'text', text: 'Output of forgotten call' }],
-        } as any],
+        } as unknown as ContentBlock],
         source: { kind: 'user' },
       })
       const assistant = createAssistantMessage({
@@ -422,6 +426,66 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
       const textBlocks = assistant.content.filter(b => b.type === 'text')
       expect(textBlocks).toHaveLength(1)
       expect(textBlocks[0]!.text).toBe('(thinking completed without explicit text)')
+    })
+  })
+
+  describe('Lone Surrogate & UTF-16 Boundary Defenses (#9089)', () => {
+    it('sanitizes lone surrogate in user message text blocks to well-formed unicode', () => {
+      const illFormedUser = createUserMessage({
+        content: [{ type: 'text', text: 'hello\uDD16world\uD800!' }],
+        source: { kind: 'user' },
+      })
+
+      const transformed = transformMessages([illFormedUser])
+
+      expect(transformed).toHaveLength(1)
+      const text = (transformed[0]!.content[0] as TextBlock).text
+      expect(text.isWellFormed()).toBe(true)
+      expect(text).toBe('hello\uFFFDworld\uFFFD!')
+    })
+
+    it('sanitizes lone surrogate in assistant reasoning and text blocks', () => {
+      const illFormedAssistant = createAssistantMessage({
+        content: [
+          { type: 'reasoning', text: 'thinking\uD800step' },
+          { type: 'text', text: 'result\uDC00value' },
+        ],
+        source: { provider: 'deepseek-official', model: 'deepseek-reasoner' },
+      })
+
+      const transformed = transformMessages([illFormedAssistant])
+
+      expect(transformed).toHaveLength(1)
+      const reasoning = (transformed[0]!.content[0] as ReasoningBlock).text
+      const text = (transformed[0]!.content[1] as TextBlock).text
+      expect(reasoning.isWellFormed()).toBe(true)
+      expect(text.isWellFormed()).toBe(true)
+      expect(reasoning).toBe('thinking\uFFFDstep')
+      expect(text).toBe('result\uFFFDvalue')
+    })
+
+    it('prevents surrogate pair chopping during large tool result truncation', () => {
+      // Place a surrogate pair (emoji 😀: \uD83D\uDE00) exactly straddling the HEAD_CHARS boundary
+      const prefix = 'a'.repeat(HEAD_CHARS - 1)
+      const emoji = '😀' // \uD83D\uDE00 (length 2)
+      const bigText = prefix + emoji + 'b'.repeat(MAX_TOOL_OUTPUT_CHARS + 500)
+
+      const assistantMsg = createAssistantMessage({
+        content: [{ type: 'tool-call', id: ToolCallId('call-trunc-1'), name: 'read', arguments: '{}' }],
+        source: { provider: 'deepseek-official', model: 'deepseek-chat' },
+      })
+      const userToolResult = createToolResultMessage({
+        callId: ToolCallId('call-trunc-1'),
+        content: [{ type: 'text', text: bigText }],
+        isError: false,
+      })
+
+      const transformed = transformMessages([assistantMsg, userToolResult])
+      const resultBlock = transformed[1]!.content[0] as TextBlock
+
+      expect(resultBlock.text.isWellFormed()).toBe(true)
+      expect(resultBlock.text).toContain('DSH System Guard: Tool output truncated')
+      expect(resultBlock.text.length).toBeLessThan(bigText.length)
     })
   })
 })

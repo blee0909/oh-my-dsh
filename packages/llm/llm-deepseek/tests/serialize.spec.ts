@@ -483,4 +483,35 @@ describe('Messages images', () => {
     expect(() => serialize(options({ model }), connection, [result('a', [image])], new Map([[ref.attachmentId, version]]), access, undefined, new Map()))
       .toThrow(/request file id is missing/)
   })
+
+  it('sanitizes lone surrogates across messages, tools, and system prompts to well-formed wire payload (#9089)', () => {
+    const illFormedUser: RequestUserInput = {
+      role: 'user',
+      content: [{ type: 'text', text: 'ill-formed\uD800user' }],
+    }
+    const tools = [{
+      name: 'test_tool',
+      description: 'tool with\uDC00surrogate',
+      parameters: {},
+    }]
+    const request = serialize(
+      options({
+        messages: [illFormedUser],
+        system: 'system with\uD800prompt',
+        tools,
+      }),
+      connection,
+      [illFormedUser],
+      new Map(),
+      () => undefined,
+    )
+
+    expect(request.system).toBe('system with\uFFFDprompt')
+    expect(request.system?.isWellFormed()).toBe(true)
+    const wireUserText = (request.messages[0]?.content[0] as { text: string }).text
+    expect(wireUserText).toBe('ill-formed\uFFFDuser')
+    expect(wireUserText.isWellFormed()).toBe(true)
+    expect(request.tools?.[0]?.description).toBe('tool with\uFFFDsurrogate')
+    expect(request.tools?.[0]?.description?.isWellFormed()).toBe(true)
+  })
 })

@@ -52,28 +52,54 @@ function extractTextFromBlocks(blocks: readonly unknown[]): string {
     .join('\n')
 }
 
-/** Truncate text block within bounded budget preserving head and tail. */
-function truncateTextUnderBudget(text: string): string {
-  if (text.length <= MAX_TOOL_OUTPUT_CHARS) return text
-  const head = text.slice(0, HEAD_CHARS)
-  const tail = text.slice(-TAIL_CHARS)
-  const notice = `\n... [DSH System Guard: Tool output truncated (${text.length} chars). Head ${HEAD_CHARS} and tail ${TAIL_CHARS} retained. Full raw output is persisted in local session store] ...\n`
+/** Truncate text block within bounded budget preserving head and tail without splitting surrogate pairs (#9089). */
+export function truncateTextUnderBudget(text: string): string {
+  if (text.length <= MAX_TOOL_OUTPUT_CHARS) {
+    return text.isWellFormed() ? text : text.toWellFormed()
+  }
+  let headEnd = HEAD_CHARS
+  if (headEnd > 0 && headEnd < text.length) {
+    const code = text.charCodeAt(headEnd - 1)
+    if (code >= 0xD800 && code <= 0xDBFF) {
+      headEnd--
+    }
+  }
+  let tailStart = text.length - TAIL_CHARS
+  if (tailStart > 0 && tailStart < text.length) {
+    const code = text.charCodeAt(tailStart)
+    if (code >= 0xDC00 && code <= 0xDFFF) {
+      tailStart++
+    }
+  }
+  const head = text.slice(0, headEnd).toWellFormed()
+  const tail = text.slice(tailStart).toWellFormed()
+  const notice = `\n... [DSH System Guard: Tool output truncated (${text.length} chars). Head ${head.length} and tail ${tail.length} retained. Full raw output is persisted in local session store] ...\n`
   return `${head}${notice}${tail}`
 }
 
-/** Sanitize and defensively truncate tool-result blocks within budget. */
+/** Sanitize and defensively truncate tool-result blocks within budget and well-formed Unicode (#9089). */
 function sanitizeToolResultBlocks(blocks: readonly unknown[]): { blocks: ContentBlock[]; modified: boolean } {
   let changed = false
   const sanitized: ContentBlock[] = []
 
   for (const item of blocks) {
     const block = item as Record<string, unknown> | undefined
-    if (block?.type === 'text' && typeof block.text === 'string' && block.text.length > MAX_TOOL_OUTPUT_CHARS) {
-      changed = true
-      sanitized.push({
-        type: 'text',
-        text: truncateTextUnderBudget(block.text),
-      })
+    if (block?.type === 'text' && typeof block.text === 'string') {
+      if (block.text.length > MAX_TOOL_OUTPUT_CHARS) {
+        changed = true
+        sanitized.push({
+          type: 'text',
+          text: truncateTextUnderBudget(block.text),
+        })
+      } else if (!block.text.isWellFormed()) {
+        changed = true
+        sanitized.push({
+          type: 'text',
+          text: block.text.toWellFormed(),
+        })
+      } else {
+        sanitized.push(item as ContentBlock)
+      }
     } else if (block?.type === 'tool-result' && Array.isArray(block.content)) {
       const nested = sanitizeToolResultBlocks(block.content)
       if (nested.modified) {
@@ -156,7 +182,7 @@ export function transformMessages(
       if (hasEncounteredDialogue && !_options.allowInHistorySystem) {
         // In-history system message: convert into user directive
         modified = true
-        const text = extractTextFromBlocks(msg.content)
+        const text = extractTextFromBlocks(msg.content).toWellFormed()
         staged.push(
           createUserMessage({
             source: { kind: 'user' },
@@ -164,7 +190,18 @@ export function transformMessages(
           }),
         )
       } else {
-        staged.push(msg)
+        const hasIllFormed = msg.content.some(b => b.type === 'text' && !b.text.isWellFormed())
+        if (hasIllFormed) {
+          modified = true
+          staged.push(
+            freezeMessage({
+              ...msg,
+              content: msg.content.map(b => b.type === 'text' && !b.text.isWellFormed() ? { ...b, text: b.text.toWellFormed() } : b),
+            }),
+          )
+        } else {
+          staged.push(msg)
+        }
       }
       continue
     }
@@ -221,6 +258,13 @@ export function transformMessages(
               sanitizedContent.push(item)
             }
           }
+        } else if (item.type === 'text' && !item.text.isWellFormed()) {
+          userTurnModified = true
+          modified = true
+          sanitizedContent.push({
+            type: 'text',
+            text: item.text.toWellFormed(),
+          })
         } else {
           sanitizedContent.push(item)
         }
@@ -253,10 +297,22 @@ export function transformMessages(
       }
 
       // Defense (#5773): Filter out empty text blocks that crash Claude API (HTTP 400 text cannot be empty)
+      // Defense (#9089): Filter/clean lone surrogates across text and reasoning blocks
+      const hasIllFormed = msg.content.some(b => (b.type === 'text' || b.type === 'reasoning') && !b.text.isWellFormed())
       const hasEmptyText = msg.content.some(b => b.type === 'text' && b.text.trim().length === 0)
-      const sanitizedContent = hasEmptyText
-        ? msg.content.filter(b => !(b.type === 'text' && b.text.trim().length === 0))
-        : msg.content
+      let sanitizedContent = msg.content
+      if (hasIllFormed) {
+        modified = true
+        sanitizedContent = sanitizedContent.map((b) => {
+          if ((b.type === 'text' || b.type === 'reasoning') && !b.text.isWellFormed()) {
+            return { ...b, text: b.text.toWellFormed() }
+          }
+          return b
+        })
+      }
+      if (hasEmptyText) {
+        sanitizedContent = sanitizedContent.filter(b => !(b.type === 'text' && b.text.trim().length === 0))
+      }
 
       const toolCalls = sanitizedContent.filter(b => b.type === 'tool-call')
       const textBlocks = sanitizedContent.filter(b => b.type === 'text')
@@ -264,7 +320,7 @@ export function transformMessages(
 
       // Case A: Message has tool calls or valid non-empty text blocks
       if (toolCalls.length > 0 || textBlocks.length > 0) {
-        if (hasEmptyText) {
+        if (hasEmptyText || hasIllFormed) {
           modified = true
           staged.push(
             freezeMessage({
