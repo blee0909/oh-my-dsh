@@ -574,4 +574,21 @@ describe('Definition-owned Chat process groups', () => {
     expect(h.commit()?.entries).toBeUndefined()
     expect(source.getSnapshot()?.data.closed).toBe(true)
   })
+
+  it('tolerates String.prototype.replaceAll pollution in liveReasoningDetail (Discussions #9167)', () => {
+    const originalReplaceAll = String.prototype.replaceAll
+    try {
+      ;(String.prototype as { replaceAll?: unknown }).replaceAll = function (
+        pattern: string | RegExp,
+        replacement: unknown,
+      ) {
+        return (this as string).replace(new RegExp(pattern, 'gm'), String(replacement))
+      }
+      const nodes = [assistant('**Analyzing files**')]
+      const summary = processActivity(nodes)
+      expect(summary.runningDetail).toBe('Analyzing files')
+    } finally {
+      String.prototype.replaceAll = originalReplaceAll
+    }
+  })
 })

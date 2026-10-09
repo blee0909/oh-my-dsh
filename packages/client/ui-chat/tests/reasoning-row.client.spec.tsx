@@ -315,4 +315,30 @@ describe('ReasoningRow', () => {
       ),
     ).not.toBeNull()
   })
+
+  it('survives third-party userscript corruption of String.prototype.replaceAll (Discussions #9167)', () => {
+    const originalReplaceAll = String.prototype.replaceAll
+    try {
+      // Simulate third-party userscript naive polyfill throwing on non-regex pattern '**'
+      ;(String.prototype as { replaceAll?: unknown }).replaceAll = function (
+        pattern: string | RegExp,
+        replacement: unknown,
+      ) {
+        return (this as string).replace(new RegExp(pattern, 'gm'), String(replacement))
+      }
+      const view = render(
+        <ReasoningRow
+          useDisclosure={useDisclosure}
+          text={'**Thinking deeply**\nStep 1'}
+          running={false}
+          usePresentation={useDetailedPresentation}
+          t={t}
+        />,
+      )
+      const root = view.container.querySelector('[data-variant="think"]')!
+      expect(root.querySelector('[class*="summaryText"]')?.textContent).toBe('Thinking deeply')
+    } finally {
+      String.prototype.replaceAll = originalReplaceAll
+    }
+  })
 })

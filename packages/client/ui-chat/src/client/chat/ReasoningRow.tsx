@@ -3,6 +3,7 @@ import { memo, useMemo } from 'react'
 import { DisclosureRow, IconThinkOutlineRegular, MarkdownText, TextShimmer } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatViewSlotProps, UseDisclosure, UsePresentation } from '../contract/slots.ts'
 import { markdownLabels } from '../markdown-labels.ts'
+import { stripMarkdownBold } from '../conversation-nodes/process-activity.ts'
 import a11yCss from './accessibility.module.css'
 import css from './ReasoningRow.module.css'
 
@@ -54,7 +55,7 @@ export const ReasoningRow = memo(function ReasoningRow({ text, running, usePrese
   const { expanded, toggle } = useDisclosure()
   const labels = useMemo(() => markdownLabels(t), [t])
   const summaryText = running ? latestCompletedParagraphFirstLine(text) : firstLine(text)
-  const summary = useMemo(() => summaryText.replaceAll('**', ''), [summaryText])
+  const summary = useMemo(() => stripMarkdownBold(summaryText), [summaryText])
   const preview = usePresentation(policy => !expanded && summary !== ''
     && (running || policy.settledReasoningPreview))
   const collapsedContent = useMemo(() => (

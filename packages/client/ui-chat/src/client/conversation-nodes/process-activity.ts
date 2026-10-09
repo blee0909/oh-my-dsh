@@ -92,6 +92,15 @@ function questionDetail(value: unknown): string {
   return ''
 }
 
+/**
+ * Strip double-asterisk Markdown bold markers without relying on
+ * `String.prototype.replaceAll`, which may be corrupted or naively polyfilled
+ * by third-party browser userscripts (Discussions #9167).
+ */
+export function stripMarkdownBold(text: string): string {
+  return text.split('**').join('')
+}
+
 function liveReasoningDetail(nodes: readonly ChatNode[]): string {
   for (let nodeIndex = nodes.length - 1; nodeIndex >= 0; nodeIndex--) {
     const node = nodes[nodeIndex]
@@ -101,7 +110,7 @@ function liveReasoningDetail(nodes: readonly ChatNode[]): string {
       if (block?.kind !== 'reasoning') continue
       const paragraphs = block.text.split(/\r?\n[\t ]*\r?\n/)
       for (let paragraphIndex = paragraphs.length - 1; paragraphIndex >= 0; paragraphIndex--) {
-        const detail = normalizeLiveToolDetail(paragraphs[paragraphIndex]?.replaceAll('**', ''))
+        const detail = normalizeLiveToolDetail(stripMarkdownBold(paragraphs[paragraphIndex] ?? ''))
         if (detail !== '') return detail
       }
     }
