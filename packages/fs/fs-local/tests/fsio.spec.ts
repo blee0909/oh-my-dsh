@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmod, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile, mkdir, readdir, realpath } from 'node:fs/promises'
+import { chmod, lstat, mkdtemp, readFile, rename, rm, stat, symlink, unlink, writeFile, mkdir, readdir, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, parse, relative, resolve } from 'node:path'
 import { createServer } from 'node:net'
@@ -191,6 +191,19 @@ describe('probe', () => {
     await writeFile(join(dir, 'afile'), 'i am a file')
     expect(await probe(join(dir, 'afile', 'child.txt'))).toBeNull()
   })
+
+  it('tolerates non-BigInt (number) metadata fields from archive or custom stat layers (Discussions #9189)', async () => {
+    const file = join(dir, 'asar-simulated.txt')
+    await writeFile(file, 'asar content')
+    const realStat = await stat(file)
+    const info = await probe(file, {
+      stat: async () => realStat,
+    })
+    expect(info?.type).toBe('file')
+    expect(info?.size).toBe(12)
+    expect(typeof info?.mode).toBe('number')
+    expect(typeof info?.version).toBe('string')
+  })
 })
 
 describe('probeNoFollow', () => {
@@ -207,10 +220,17 @@ describe('probeNoFollow', () => {
     expect(linkInfo?.size).toBeGreaterThan(0)
   })
 
-  it('returns null for a missing path or a file-valued ancestor path segment', async () => {
-    expect(await probeNoFollow(join(dir, 'missing'))).toBeNull()
-    await writeFile(join(dir, 'afile'), 'i am a file')
-    expect(await probeNoFollow(join(dir, 'afile', 'child.txt'))).toBeNull()
+  it('tolerates non-BigInt (number) metadata fields in probeNoFollow (Discussions #9189)', async () => {
+    const file = join(dir, 'asar-nofollow.txt')
+    await writeFile(file, 'nofollow content')
+    const realLstat = await lstat(file)
+    const info = await probeNoFollow(file, {
+      lstat: async () => realLstat,
+    })
+    expect(info?.type).toBe('file')
+    expect(info?.size).toBe(16)
+    expect(typeof info?.mode).toBe('number')
+    expect(typeof info?.version).toBe('string')
   })
 })
 

@@ -942,4 +942,26 @@ describe('FileSystemSkillProvider', () => {
       }
     }
   })
+
+  it('isolates single-root discovery failures and preserves skills from healthy roots (Discussions #9189)', async () => {
+    const home = await tempDir('skill-root-failure-home')
+    const healthyRoot = join(home, 'healthy-skills')
+    const badRoot = join(home, 'bad-skills')
+    await writeSkill(healthyRoot, 'healthy-skill', 'Healthy skill description')
+    await writeSkill(badRoot, 'bad-skill', 'Bad skill description')
+
+    const ctx = new Context()
+    await ctx.plugin(SkillRegistry)
+    const testFs = new TestFileSystem(ctx)
+    testFs.failListDirPaths.add(badRoot)
+
+    await ctx.plugin(SkillFileSystem, {
+      includeDefaultRoots: false,
+      customSkillDirs: [badRoot, healthyRoot],
+      watch: false,
+    })
+
+    const result = await ctx.skills.list()
+    expect(result.map(s => s.name)).toEqual(['healthy-skill'])
+  })
 })

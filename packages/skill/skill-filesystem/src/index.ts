@@ -194,8 +194,13 @@ export class FileSystemSkillProvider implements SkillProvider {
     }
     const candidates: SkillCandidate[] = []
     for (const root of roots) {
-      for (const skill of await discoverRoot(root, this.ctx, this.name)) {
-        candidates.push(skill)
+      try {
+        for (const skill of await discoverRoot(root, this.ctx, this.name)) {
+          candidates.push(skill)
+        }
+      } catch (error) {
+        complete = false
+        this.ctx.logger.warn(`skill-filesystem: failed to scan root "${root.path}": ${errorMessage(error)}`)
       }
     }
     return complete ? candidates : { candidates, complete }
