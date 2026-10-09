@@ -176,6 +176,7 @@ interface SessionHeaderRow {
   seed_length: number | null
   delegation_depth: number | null
   agent_preset: string | null
+  origin: string | null
 }
 
 interface SearchRow extends SessionHeaderRow {
@@ -588,8 +589,8 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const db = this._requireDb()
     db.prepare(`
       INSERT INTO persisted_sessions
-        (id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, revision, generation)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, origin, revision, generation)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       ...headerBindings(entry.header, entry.inheritedEventCount),
       revision,
@@ -618,8 +619,8 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const db = this._requireDb()
     db.prepare(`
       INSERT INTO temp.live_sessions
-        (id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, fingerprint, persisted, generation)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, origin, fingerprint, persisted, generation)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       ...headerBindings(entry.header, entry.inheritedEventCount),
       entry.fingerprint,
@@ -714,7 +715,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     const db = this._requireDb()
     const live = db.prepare(
       `SELECT
-        id AS session_id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, generation
+        id AS session_id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, origin, generation
       FROM temp.live_sessions
       WHERE id = ?`,
     ).get(sessionId) as (SessionHeaderRow & { generation: number }) | undefined
@@ -724,7 +725,7 @@ export class SqliteSessionQueryEngine extends SessionQueryEngine {
     if (persistenceBinding.service !== undefined) {
       const persisted = db.prepare(
         `SELECT
-          id AS session_id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, generation
+          id AS session_id, version, created_at, cwd, parent_session, seed_length, delegation_depth, agent_preset, origin, generation
         FROM persisted_sessions
         WHERE id = ?`,
       ).get(sessionId) as (SessionHeaderRow & { generation: number }) | undefined
@@ -791,6 +792,7 @@ function headerBindings(
     header.isSeeded ? inheritedEventCount : null,
     header.delegationDepth ?? null,
     header.agentPreset ?? null,
+    header.origin ?? null,
   ]
 }
 
@@ -806,6 +808,7 @@ function selectedDocumentsSql(): { sql: string } {
         ps.seed_length AS seed_length,
         ps.delegation_depth AS delegation_depth,
         ps.agent_preset AS agent_preset,
+        ps.origin AS origin,
         0 AS live,
         1 AS persisted,
         CAST(pd.seq AS INTEGER) AS seq,
@@ -829,6 +832,7 @@ function selectedDocumentsSql(): { sql: string } {
         ls.seed_length AS seed_length,
         ls.delegation_depth AS delegation_depth,
         ls.agent_preset AS agent_preset,
+        ls.origin AS origin,
         1 AS live,
         CASE WHEN ? = 1 THEN ls.persisted ELSE 0 END AS persisted,
         CAST(ld.seq AS INTEGER) AS seq,
@@ -941,6 +945,7 @@ function sameHeader(a: SessionHeader, b: SessionHeader): boolean {
     && a.cwd === b.cwd
     && a.parentSession === b.parentSession
     && a.isSeeded === b.isSeeded
+    && a.origin === b.origin
     && (a.delegationDepth ?? 0) === (b.delegationDepth ?? 0)
     && a.agentPreset === b.agentPreset
 }
@@ -953,6 +958,7 @@ function rowHeader(row: SessionHeaderRow): SessionHeader {
     ...row.cwd === null ? {} : { cwd: row.cwd },
     ...row.parent_session === null ? {} : { parentSession: row.parent_session as SessionId },
     isSeeded: row.seed_length !== null,
+    ...row.origin === 'subagent' ? { origin: 'subagent' as const } : {},
     ...row.delegation_depth === null ? {} : { delegationDepth: row.delegation_depth },
     ...row.agent_preset === null ? {} : { agentPreset: row.agent_preset },
   }

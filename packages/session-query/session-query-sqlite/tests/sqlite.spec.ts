@@ -365,6 +365,84 @@ describe('SQLite session search', () => {
       .resolves.toMatchObject({ items: [{ header: session.header, live: true, persisted: false }] })
   })
 
+  it('preserves SessionHeader origin for subagent children and omits it for ordinary sessions (Discussions #8979)', async () => {
+    const ctx = await liveContext({ path: ':memory:' })
+    const parentId = SessionId('audit-parent')
+    const childId = SessionId('audit-child')
+    const normalId = SessionId('audit-normal')
+
+    const child = ctx.sessions.create(childId, {
+      meta: {
+        parentSession: parentId,
+        origin: 'subagent',
+        delegationDepth: 1,
+      },
+    })
+    child.append(
+      'user/message',
+      createUserMessage({
+        content: [{ type: 'text', text: 'subagent audit task' }], source: { kind: 'user' },
+      }),
+      { surfaceOp: 'append' },
+    )
+
+    const normal = ctx.sessions.create(normalId, {
+      meta: {
+        parentSession: parentId,
+      },
+    })
+    normal.append(
+      'user/message',
+      createUserMessage({
+        content: [{ type: 'text', text: 'normal audit task' }], source: { kind: 'user' },
+      }),
+      { surfaceOp: 'append' },
+    )
+
+    const childSearch = await ctx.sessionQuery.searchSessions({ query: 'subagent' })
+    expect(childSearch.items[0]?.header.origin).toBe('subagent')
+    expect(childSearch.items[0]?.header).toEqual(child.header)
+
+    const normalSearch = await ctx.sessionQuery.searchSessions({ query: 'normal' })
+    expect(normalSearch.items[0]?.header.origin).toBeUndefined()
+    expect(normalSearch.items[0]?.header).toEqual(normal.header)
+
+    const childEvents = await ctx.sessionQuery.searchEvents({ sessionId: childId, query: 'subagent' })
+    expect(childEvents.session?.origin).toBe('subagent')
+    expect(childEvents.session).toEqual(child.header)
+
+    const normalEvents = await ctx.sessionQuery.searchEvents({ sessionId: normalId, query: 'normal' })
+    expect(normalEvents.session?.origin).toBeUndefined()
+    expect(normalEvents.session).toEqual(normal.header)
+  })
+
+  it('preserves SessionHeader origin across persisted index reconstruction (Discussions #8979)', async () => {
+    const ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(SessionProjectionRegistry)
+    const childHeader = header('persisted-child', 10, {
+      parentSession: SessionId('parent'),
+      origin: 'subagent',
+      delegationDepth: 1,
+    })
+    TestPersistence.reset([
+      { meta: childHeader, events: messageEvents('persisted subagent task') },
+    ])
+    await ctx.plugin(TestPersistence)
+    await ctx.plugin(SqliteSessionQueryEngine, { path: ':memory:' })
+
+    const search = await ctx.sessionQuery.searchSessions({ query: 'subagent' })
+    expect(search.items[0]?.header.origin).toBe('subagent')
+    expect(search.items[0]?.header).toEqual(childHeader)
+
+    const events = await ctx.sessionQuery.searchEvents({
+      sessionId: SessionId('persisted-child'),
+      query: 'subagent',
+    })
+    expect(events.session?.origin).toBe('subagent')
+    expect(events.session).toEqual(childHeader)
+  })
+
   it('excludes assistant reasoning while indexing visible answer text', async () => {
     const ctx = await liveContext()
     const session = ctx.sessions.create(SessionId('reasoning'))
