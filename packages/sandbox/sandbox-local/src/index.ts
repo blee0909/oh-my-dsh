@@ -101,6 +101,7 @@ function defaultProbeSeatbelt(seatbeltExec: string, timeoutMs: number): boolean 
 function defaultProbeWindowsAcl(runnerInvocation: string[], timeoutMs: number): boolean {
   const program = runnerInvocation[0]
   if (program === undefined) return false
+  const isElectron = process.versions.electron !== undefined || process.env.ELECTRON_RUN_AS_NODE === '1'
   const probe = spawnSync(program, [
     ...runnerInvocation.slice(1),
     '--workspace', tmpdir(), '--temp', tmpdir(), '--mode', 'read-only',
@@ -108,6 +109,10 @@ function defaultProbeWindowsAcl(runnerInvocation: string[], timeoutMs: number): 
   ], {
     timeout: timeoutMs,
     stdio: 'ignore',
+    env: {
+      ...process.env,
+      ...isElectron ? { ELECTRON_RUN_AS_NODE: '1' } : {},
+    },
   })
   return probe.status === 0
 }

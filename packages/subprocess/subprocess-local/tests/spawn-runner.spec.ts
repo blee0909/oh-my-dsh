@@ -233,14 +233,19 @@ describe('closed runner protocol', () => {
     const link = join(tmpdir(), `dsh-runner-cleanup-link-${String(process.pid)}`)
     scratch.push(target, link)
     mkdirSync(target, { recursive: true })
-    symlinkSync(target, link)
-    cleanupLinuxLaunchFiles({
-      directory: link,
-      requestPath: join(link, 'launch-request.json'),
-      startupErrorPath: join(link, 'startup-error.json'),
-    })
-    expect(existsSync(link)).toBe(false)
-    expect(existsSync(target)).toBe(true)
+    try {
+      symlinkSync(target, link)
+      cleanupLinuxLaunchFiles({
+        directory: link,
+        requestPath: join(link, 'launch-request.json'),
+        startupErrorPath: join(link, 'startup-error.json'),
+      })
+      expect(existsSync(link)).toBe(false)
+      expect(existsSync(target)).toBe(true)
+    } catch (error: unknown) {
+      const hasEperm = typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === 'EPERM'
+      if (process.platform !== 'win32' || !hasEperm) throw error
+    }
 
     const blocked = track(createLinuxLaunchFiles({ cwd: '/ok', env: {} }))
     unlinkSync(blocked.requestPath)
@@ -315,6 +320,56 @@ describe('runner launch inputs', () => {
       })
     } finally {
       vi.unstubAllEnvs()
+    }
+  })
+
+  it('supplies ELECTRON_RUN_AS_NODE to runner and internal runner target in Electron host without leaking to user commands (Discussions #10090)', async () => {
+    const originalElectron = (process.versions as Record<string, string | undefined>).electron
+    Object.defineProperty(process.versions, 'electron', { value: '44.0.0', configurable: true, writable: true })
+    try {
+      const runnerEnv = runnerEnvironment('/tmp/request', [process.execPath, '/repo/runner.js'])
+      expect(runnerEnv.ELECTRON_RUN_AS_NODE).toBe('1')
+
+      // Internal runner target using process.execPath (e.g. windows-acl runner) receives ELECTRON_RUN_AS_NODE
+      const internalTargetEnv = targetEnvironment({
+        argv: [process.execPath, '/path/to/runner.js'],
+        cwd: process.cwd(),
+      })
+      expect(internalTargetEnv.ELECTRON_RUN_AS_NODE).toBe('1')
+
+      // User target commands (e.g. pwsh.exe, bash, user electron app) do not receive ELECTRON_RUN_AS_NODE
+      const userTargetEnv = targetEnvironment({
+        argv: ['pwsh.exe', '-Command', 'echo hi'],
+        cwd: process.cwd(),
+      })
+      expect(userTargetEnv.ELECTRON_RUN_AS_NODE).toBeUndefined()
+
+      // runSpawnRunner scrubs ELECTRON_RUN_AS_NODE from host.env
+      const fakeHost = {
+        env: { ELECTRON_RUN_AS_NODE: '1', SAFE: '1' },
+        exitCode: undefined,
+        connected: false,
+        cwd: () => process.cwd(),
+        chdir: () => {},
+        on: () => fakeHost as unknown as NodeJS.Process,
+        off: () => fakeHost as unknown as NodeJS.Process,
+        once: () => fakeHost as unknown as NodeJS.Process,
+        disconnect: () => {},
+      } as unknown as NonNullable<Parameters<typeof runSpawnRunner>[2]>
+      try {
+        await runSpawnRunner('windows', ['--', 'dummy.exe'], fakeHost, {
+          loadWin32ProcessBindings: () => { throw new Error('stop') },
+        } as unknown as SpawnRunnerInternals)
+      } catch {
+        // Expected stop
+      }
+      expect(fakeHost.env.ELECTRON_RUN_AS_NODE).toBeUndefined()
+    } finally {
+      if (originalElectron === undefined) {
+        Reflect.deleteProperty(process.versions, 'electron')
+      } else {
+        Object.defineProperty(process.versions, 'electron', { value: originalElectron, configurable: true, writable: true })
+      }
     }
   })
 
@@ -454,10 +509,15 @@ describe('runner launch inputs', () => {
     writeFileSync(executable, '')
     mkdirSync(`${directoryCandidate}.com`)
     writeFileSync(`${directoryCandidate}.exe`, '')
-    symlinkSync(missingExecutable, danglingAlias, 'file')
+    try {
+      symlinkSync(missingExecutable, danglingAlias, 'file')
+      expect(resolveWindowsExecutable(danglingAlias, '', {})).toBe(danglingAlias)
+    } catch (error: unknown) {
+      const hasEperm = typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === 'EPERM'
+      if (process.platform !== 'win32' || !hasEperm) throw error
+    }
     expect(resolveWindowsExecutable(executable, '', {})).toBe(executable)
     expect(resolveWindowsExecutable(directoryCandidate, '', {})).toBe(`${directoryCandidate}.exe`)
-    expect(resolveWindowsExecutable(danglingAlias, '', {})).toBe(danglingAlias)
     expect(resolveWindowsExecutable(missingExecutable, '', {})).toBeUndefined()
   })
 })

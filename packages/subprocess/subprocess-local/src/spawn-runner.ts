@@ -453,6 +453,8 @@ export async function runSpawnRunner(
   internals: SpawnRunnerInternals = defaultInternals,
 ): Promise<void> {
   Reflect.deleteProperty(host.env, SUBPROCESS_RUNNER_ENV)
+  Reflect.deleteProperty(host.env, 'ELECTRON_RUN_AS_NODE')
+  Reflect.deleteProperty(host.env, 'electron_run_as_node')
   const targetArgv = parseRunnerTargetArgv(argv)
   if (selection === WINDOWS_RUNNER_SELECTION) {
     await new WindowsJobRunner(targetArgv, host, internals).run()

@@ -82,7 +82,7 @@ export interface Win32Bindings extends Win32ProcessBindings {
     descriptor: NativePtr,
   ): number
   getTempPathW(length: number, buffer: Buffer): number
-  setEnvironmentVariableW(name: string, value: string): number
+  setEnvironmentVariableW(name: string, value: string | null): number
   setConsoleCtrlHandler(handler: null, add: number): number
   createFileW(
     fileName: string,

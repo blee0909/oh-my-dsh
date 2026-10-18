@@ -60,6 +60,13 @@ export function runnerInvocationAvailable(invocation: RunnerInvocation = spawnRu
 }
 
 /**
+ * Detect whether the current host process is running inside Electron (e.g. ELECTRON_RUN_AS_NODE=1).
+ */
+export function isElectronRuntime(): boolean {
+  return process.versions.electron !== undefined || process.env.ELECTRON_RUN_AS_NODE === '1'
+}
+
+/**
  * Build the bootstrap-safe environment; target overrides arrive through request/IPC.
  * @param selection - private runner selector or Linux launch-request locator.
  * @param invocation - resolved runner invocation whose source form needs the workspace paths map.
@@ -82,6 +89,7 @@ export function runnerEnvironment(
     [SUBPROCESS_RUNNER_ENV]: selection,
     SYSTEMD_LOG_TARGET: 'null',
     ...entry?.endsWith('.ts') === true ? { TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH } : {},
+    ...isElectronRuntime() ? { ELECTRON_RUN_AS_NODE: '1' } : {},
   }
 }
 
@@ -304,8 +312,10 @@ export function targetEnvironment(
     validateNoNullByte(index === 0 ? 'file' : `args[${String(index - 1)}]`, value, true)
   })
   validateNoNullByte('options.cwd', spec.cwd)
+  const isTargetElectronRunner = isElectronRuntime() && spec.argv[0] === process.execPath
+  const extraEnv = isTargetElectronRunner ? { ELECTRON_RUN_AS_NODE: '1', ...spec.env } : spec.env
   const env = Object.fromEntries(
-    Object.entries(childEnv(spec.env)).filter((entry): entry is [string, string] => entry[1] !== undefined),
+    Object.entries(childEnv(extraEnv)).filter((entry): entry is [string, string] => entry[1] !== undefined),
   )
   for (const [key, value] of Object.entries(env)) {
     validateNoNullByte(`options.env['${key}']`, key)
