@@ -25,6 +25,8 @@ describe('detectTrigger word boundaries', () => {
     expect(atEnd('line1\n/go')).toMatchObject({ trigger: '/', query: 'go', position: 'inline' })
     expect(atEnd('see (/go')).toMatchObject({ trigger: '/', query: 'go' })
     expect(atEnd('ping @wo')).toMatchObject({ trigger: '@', query: 'wo' })
+    expect(atEnd('请看@说明')).toMatchObject({ trigger: '@', query: '说明', position: 'inline' })
+    expect(atEnd('（@配置')).toMatchObject({ trigger: '@', query: '配置', position: 'inline' })
   })
 
   it('does not trigger after a word character', () => {

@@ -81,6 +81,11 @@ describe('file-reference grammar', () => {
     })
     expect(activeAtToken('mail a@b.test', 13)).toBeUndefined()
     expect(activeAtToken('done @src/x" next', 17)).toBeUndefined()
+    // CJK characters and punctuation boundaries (#10091)
+    expect(activeAtToken('请看@说明.md', 8)).toEqual({ prefix: '@说明.md', query: '说明.md', quoted: false })
+    expect(activeAtToken('参考@"设计 文档.md', 12)).toEqual({ prefix: '@"设计 文档.md', query: '设计 文档.md', quoted: true })
+    expect(activeAtToken('（@配置.json', 9)).toEqual({ prefix: '@配置.json', query: '配置.json', quoted: false })
+    expect(activeAtToken('(@config.json', 13)).toEqual({ prefix: '@config.json', query: 'config.json', quoted: false })
   })
 
   it('formats files, directories, quotes, and rejects unsafe editor values', () => {

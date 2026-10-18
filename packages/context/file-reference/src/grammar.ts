@@ -17,6 +17,17 @@ export interface ActiveAtToken {
 }
 
 /**
+ * Character boundary preceding an `@` token:
+ * - Start of line (`^`)
+ * - Whitespace (`\s`)
+ * - Punctuation and symbols (`[^\w\s]`), which excludes ASCII/Unicode word characters `\w` (`[a-zA-Z0-9_]`)
+ * - CJK characters where words are not space-delimited (Han, Hiragana, Katakana, Hangul)
+ */
+const AT_BOUNDARY = /(?:^|[^\w\s]|[\s\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])/u
+const QUOTED_AT_TOKEN = new RegExp(`${AT_BOUNDARY.source}(@"([^"]*))$`, 'u')
+const PLAIN_AT_TOKEN = new RegExp(`${AT_BOUNDARY.source}(@([^\\s]*))$`, 'u')
+
+/**
  * Extract an `@path` or `@"path with spaces` token at the cursor. An `@`
  * inside another token, such as an email address, is not a completion trigger.
  * @param line - current editor line.
@@ -25,11 +36,11 @@ export interface ActiveAtToken {
  */
 export function activeAtToken(line: string, cursorCol: number): ActiveAtToken | undefined {
   const beforeCursor = line.slice(0, cursorCol)
-  const quoted = /(?:^|\s)(@"([^"]*))$/u.exec(beforeCursor)
+  const quoted = QUOTED_AT_TOKEN.exec(beforeCursor)
   if (quoted?.[1] !== undefined && quoted[2] !== undefined) {
     return { prefix: quoted[1], query: quoted[2], quoted: true }
   }
-  const plain = /(?:^|\s)(@([^\s]*))$/u.exec(beforeCursor)
+  const plain = PLAIN_AT_TOKEN.exec(beforeCursor)
   if (plain?.[1] === undefined || plain[2] === undefined) return undefined
   return { prefix: plain[1], query: plain[2], quoted: false }
 }
