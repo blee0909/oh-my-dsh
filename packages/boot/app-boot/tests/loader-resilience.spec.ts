@@ -104,7 +104,7 @@ describe('Loader fault tolerance & in-place isolation (#6134)', () => {
 
     const ctx = new Context()
     ctx.baseUrl = baseUrl
-    await ctx.plugin(Loader, { baseUrl }) // default: tolerateEntryFailures is false
+    await ctx.plugin(Loader, { baseUrl, tolerateEntryFailures: false })
 
     try {
       await expect(

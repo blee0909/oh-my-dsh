@@ -170,16 +170,20 @@ export class Entry {
       const pending = volatileOnly && this._commitVolatile() ? [] : changes
       if (!pending.length && !force) return
       this.context.emit('loader/partial-dispose', this, legacy, true)
-      try {
-        this._patchContext(pending)
-      } catch (error) {
-        if (this.ctx.fiber.uid === null) return
-        this.context.emit('loader/entry-failed', this.options, error)
-        const policy = this.parent.effectiveTolerateEntryFailures
-        const isTolerated = typeof policy === 'function' ? policy(this.options, error) : Boolean(policy)
-        if (!isTolerated) {
-          throw updateError('apply', this.options, error)
+      const policy = this.parent.effectiveTolerateEntryFailures
+      if (policy !== undefined) {
+        try {
+          this._patchContext(pending)
+        } catch (error) {
+          if (this.ctx.fiber.uid === null) return
+          this.context.emit('loader/entry-failed', this.options, error)
+          const isTolerated = typeof policy === 'function' ? policy(this.options, error) : Boolean(policy)
+          if (!isTolerated) {
+            throw updateError('apply', this.options, error)
+          }
         }
+      } else {
+        this._patchContext(pending)
       }
     } else {
       await this.init()
@@ -255,13 +259,15 @@ export class Entry {
     try {
       moduleNamespace = await this.parent.tree.import(this.options.name, this.getOuterStack)
     } catch (error) {
-      if (this.ctx.fiber.uid === null) return
-      this.context.emit('loader/entry-failed', this.options, error)
       this.ctx.logger.error(error)
       const policy = this.parent.effectiveTolerateEntryFailures
-      const isTolerated = typeof policy === 'function' ? policy(this.options, error) : Boolean(policy)
-      if (!isTolerated) {
-        throw updateError('import', this.options, error)
+      if (policy !== undefined) {
+        if (this.ctx.fiber.uid === null) return
+        this.context.emit('loader/entry-failed', this.options, error)
+        const isTolerated = typeof policy === 'function' ? policy(this.options, error) : Boolean(policy)
+        if (!isTolerated) {
+          throw updateError('import', this.options, error)
+        }
       }
       return
     } finally {
@@ -271,18 +277,23 @@ export class Entry {
     const plugin = this.loader.unwrapExports(moduleNamespace)
     this._patchContext([])
     this.loader.showLog(this, 'apply')
-    try {
+    const policy = this.parent.effectiveTolerateEntryFailures
+    if (policy !== undefined) {
+      try {
+        this.fiber = this.ctx.registry.plugin(plugin, this.options.config, this.getOuterStack).ctx.fiber
+        this.moduleNamespace = moduleNamespace
+        await this.fiber?.await()
+      } catch (error) {
+        if (this.ctx.fiber.uid === null || (error as any)?.code === 'INACTIVE_EFFECT') return
+        this.context.emit('loader/entry-failed', this.options, error)
+        const isTolerated = typeof policy === 'function' ? policy(this.options, error) : Boolean(policy)
+        if (!isTolerated) {
+          throw updateError('apply', this.options, error)
+        }
+      }
+    } else {
       this.fiber = this.ctx.registry.plugin(plugin, this.options.config, this.getOuterStack).ctx.fiber
       this.moduleNamespace = moduleNamespace
-      await this.fiber?.await()
-    } catch (error) {
-      if (this.ctx.fiber.uid === null || (error as any)?.code === 'INACTIVE_EFFECT') return
-      this.context.emit('loader/entry-failed', this.options, error)
-      const policy = this.parent.effectiveTolerateEntryFailures
-      const isTolerated = typeof policy === 'function' ? policy(this.options, error) : Boolean(policy)
-      if (!isTolerated) {
-        throw updateError('apply', this.options, error)
-      }
     }
   }
 }

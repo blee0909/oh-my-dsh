@@ -4,9 +4,6 @@ import { Buffer } from 'node:buffer'
 import { constants } from 'node:os'
 import { PassThrough } from 'node:stream'
 import type { IDisposable, IPty } from 'node-pty'
-import {
-  SubprocessForegroundSignallingUnsupportedError,
-} from '@deepseek-ai/dsh-subprocess'
 import type {
   SubprocessOutcome,
   SubprocessTerminalActivity,
@@ -198,17 +195,25 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
 
   async signalForeground(signal: SubprocessTerminalSignal): Promise<number> {
     this.shellActivity?.invalidate()
-    if (this.platform === 'win32') {
-      throw new SubprocessForegroundSignallingUnsupportedError(
-        'scoped foreground process-group signalling is unsupported on Windows; terminate the terminal session instead',
-      )
-    }
     const foreground = await this.inspectForeground()
     if (foreground === undefined) {
       throw new Error(`cannot resolve foreground process group for terminal ${this.pid}`)
     }
     if (signal === 'SIGKILL' && foreground.processGroupId === this.pid) {
       throw new Error('refusing to SIGKILL the terminal shell; terminate the terminal session instead')
+    }
+    if (this.platform === 'win32') {
+      if (signal === 'SIGINT') {
+        // Windows has no process-group signalling: a `\x03` input write is the
+        // Ctrl-C delivery path the console host turns into a console-wide
+        // CTRL_C event for attached processes. node-pty's signal kills throw on Windows, so
+        // no signal ever reaches the inspector.
+        this.terminal.write('\x03')
+        return foreground.processGroupId
+      }
+      if (signal === 'SIGTSTP' || signal === 'SIGHUP') {
+        throw new Error(`signal ${signal} is unsupported on Windows; only SIGINT, SIGTERM, and SIGKILL are available`)
+      }
     }
     this.inspector.signalGroup(foreground.processGroupId, signal)
     return foreground.processGroupId
@@ -361,13 +366,14 @@ export class LocalTerminalHandle implements SubprocessTerminalHandle {
 
   private async stopShellWindows(): Promise<void> {
     // node-pty's Windows kill(signal) throws ("Signals not supported on
-    // windows"), and its bare kill() delegates to a console-list agent that
-    // fails when the parent has no console. taskkill tree escalation is the
-    // teardown path, fenced on the shell's start identity like every
-    // descendant; a root identity miss falls back to the bare kill. taskkill
-    // termination also does not reliably fire node-pty's exit notification
-    // (the same console-list agent), so the tiers verify the shell's absence
-    // through the inspector instead of waiting on `done` alone.
+    // windows"), and its bare kill() reaches the console host by a per-host
+    // path: Windows' own host goes through a console-list agent that fails when
+    // the parent has no console, while the bundled OpenConsole runs a native
+    // kill plus conout teardown. taskkill tree escalation is the teardown path,
+    // fenced on the shell's start identity like every descendant; a root
+    // identity miss falls back to the bare kill. taskkill termination also does
+    // not reliably fire node-pty's exit notification, so the tiers verify the
+    // shell's absence through the inspector instead of waiting on `done` alone.
     const shellGone = (): boolean =>
       this.exited || (this.rootIdentity !== undefined && !this.inspector.isAlive(this.rootIdentity))
     if (!shellGone() && this.rootIdentity !== undefined) {

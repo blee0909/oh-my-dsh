@@ -7,7 +7,7 @@ import type {
   OpenFileOptions, PreparingToolCall, StartedToolCall,
   ToolResultNode, UseDisclosure,
 } from '@deepseek-ai/dsh-client-ui-chat/client'
-import type { MessageImageLoader, MessageImageSource, RenderMessageImages } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type { MessageImageLoader, MessageImageSource } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { AskUserQuestionAnswerItem, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions/types'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 
@@ -71,12 +71,6 @@ export interface ToolCallCommonProps {
   openFile: (path: string, options?: OpenFileOptions) => void
   /** Chat-supplied, session-authorized loader for durable images; Tool views do not manage attachment URLs. */
   loadImage: MessageImageLoader
-  /**
-   * Slot-backed message images renderer supplied by the chat node. Used by
-   * fallback views (e.g. GenericToolCard) to render image attachments without
-   * needing an exclusive tool.call.images child slot declaration.
-   */
-  renderMessageImages?: RenderMessageImages | undefined
   /** Inspect this call in the trajectory view when available. */
   inspect?: (() => void) | undefined
 }

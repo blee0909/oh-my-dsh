@@ -18,8 +18,8 @@ export class EntryGroup {
     return this.ctx
   }
 
-  get effectiveTolerateEntryFailures(): boolean | EntryFailurePredicate {
-    return this.tolerateEntryFailures ?? this.tree.tolerateEntryFailures ?? false
+  get effectiveTolerateEntryFailures(): boolean | EntryFailurePredicate | undefined {
+    return this.tolerateEntryFailures ?? this.tree.tolerateEntryFailures
   }
 
   async create(options: Omit<EntryOptions, 'id'>) {
@@ -57,6 +57,22 @@ export class EntryGroup {
     const newMap = Object.fromEntries(config.map(options => [options.id ?? Symbol('anonymous'), options]))
 
     const policy = this.effectiveTolerateEntryFailures
+    const ids = Reflect.ownKeys({ ...oldMap, ...newMap }) as string[]
+
+    if (policy === undefined) {
+      this.data = config
+      await Promise.all(ids.map(async (id) => {
+        if (newMap[id]) {
+          await this.create(newMap[id]).catch((error) => {
+            this.ctx.logger.error(error)
+          })
+        } else {
+          this.remove(id)
+        }
+      }))
+      return
+    }
+
     const isTolerated = (options: EntryOptions, error: unknown): boolean => {
       if (typeof policy === 'function') return policy(options, error)
       return Boolean(policy)
@@ -65,8 +81,6 @@ export class EntryGroup {
     const createdIds: string[] = []
     const fatalFailures: unknown[] = []
 
-    // update inner plugins
-    const ids = Reflect.ownKeys({ ...oldMap, ...newMap }) as string[]
     for (const id of ids) {
       if (this.ctx.fiber.uid === null) return
       if (newMap[id]) {
@@ -76,7 +90,7 @@ export class EntryGroup {
           createdIds.push(options.id ?? String(id))
         } catch (error) {
           if (this.ctx.fiber.uid === null) return
-          if (policy && isTolerated(options, error)) {
+          if (isTolerated(options, error)) {
             this.context.emit('loader/entry-failed', options, error)
             this.ctx.logger.error(error)
           } else {

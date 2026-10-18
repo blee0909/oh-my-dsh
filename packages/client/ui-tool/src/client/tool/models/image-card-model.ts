@@ -1,31 +1,28 @@
 /** Pure image-card derivation from raw result content and metadata. @module */
 import type { AttachmentId, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
-import { abbreviateHomePath, relativizeToCwd } from '@deepseek-ai/dsh-util-workspace-path'
 import type { ToolCallBlock } from './tool-call-model.ts'
 import { parsedToolCall } from './raw-tool-call.ts'
 
 /**
- * The image-card material one settled call contributes: the display label plus
- * the durable references the attachment slot renders as a gallery.
+ * The image-card material one settled call contributes: the read path plus the
+ * durable references the attachment slot renders as a gallery.
  *
  * The bytes are not here. `attachmentId` is opaque and provider-owned, so a UI
  * resolves it to a session-authorized URL at render time; this model never parses
  * it nor derives a path from it.
  */
 export interface ImageCardModel {
-  /** Card label: the read path, shortened the way every other card's is. */
-  label: string
+  /** The resolved path as recorded, unshortened; the row summary already shows the short form. */
+  path: string
   /** The durable images this result returned, in result order. */
   images: readonly { readonly attachment: ImageAttachmentRef }[]
   /**
-   * The model-facing envelope text, for the line under the gallery.
-   *
-   * Taken from the result's own text block rather than the row's flattened
-   * result text: an image read's content is `[text envelope, image block]`, and
-   * flattening JSON.stringifies the image block, which would print the raw
-   * attachment object under the picture — the symptom this card exists to remove.
+   * Text blocks other than the model-facing envelope (for example, text a
+   * post-execute hook appended), joined in order; null when there are none.
+   * The envelope itself is not repeated: its path and image facts are already
+   * `path` and `images`.
    */
-  text: string
+  extraText: string | null
 }
 
 /**
@@ -35,7 +32,7 @@ export interface ImageCardModel {
  *
  * Root calls persist it; a nested call (a read_image dispatched from inside
  * run_code) settles without `meta`, so the card falls back to the call's own
- * `file_path` argument for the label.
+ * `file_path` argument for the path.
  *
  * The attachment reference deliberately does NOT come from here. The settled
  * `content` already carries the image block with its complete reference, so
@@ -150,24 +147,17 @@ function imageReferences(content: readonly unknown[]): ImageAttachmentRef[] | nu
 }
 
 /**
- * Read the text of every text block of a settled image result, joined in order.
- *
- * The envelope is one of them; a post-execute hook that appends further text
- * blocks keeps them visible under the gallery instead of being dropped. The
- * envelope shape is still the recognition gate: a result without it is not a
- * well-formed image read and declines.
- * @param content - the settled result's content blocks.
- * @returns the joined text, or null when no envelope-shaped block is present.
+ * Join the text blocks other than the image envelope, in order. A post-execute
+ * hook that appends further text blocks keeps them visible under the gallery
+ * instead of being dropped.
+ * @param content - the settled result's text blocks.
+ * @returns the joined text, or null when there is none.
  */
-function imageTexts(content: readonly { type: string; text?: string }[]): string | null {
-  const parts: string[] = []
-  let sawEnvelope = false
-  for (const part of content) {
-    if (part.type !== 'text' || typeof part.text !== 'string') continue
-    if (IMAGE_ENVELOPE.test(part.text)) sawEnvelope = true
-    parts.push(part.text)
-  }
-  return sawEnvelope && parts.length > 0 ? parts.join('\n') : null
+function extraTexts(content: readonly { type: string; text?: string }[]): string | null {
+  const parts = content.flatMap(part => part.type === 'text' && typeof part.text === 'string' && !IMAGE_ENVELOPE.test(part.text)
+    ? [part.text]
+    : [])
+  return parts.length > 0 ? parts.join('\n') : null
 }
 
 /**
@@ -195,20 +185,13 @@ function fullyRendered(content: readonly unknown[]): boolean {
  *
  * The card is result-side only: a call carries no content until `execute`
  * returns, so a running `read_image` has none and this returns null for it.
- * Both root and nested calls settle as ToolResultNode; the nested one (a
- * read_image dispatched from inside run_code) persists no presentationMeta, so
- * its label falls back to the call's own `file_path` argument.
+ * Both root and nested calls settle as ToolResultNode. Historical nested
+ * records without presentation metadata fall back to the call's own
+ * `file_path` argument for the path.
  * @param block - running or settled Tool block.
- * @param sessionCwd - the session workspace root; a workspace-rooted absolute
- *   path label displays relative to it. Absent leaves the path as authored.
- * @param home - host account home; a leftover POSIX home path displays as `~`.
  * @returns the image-card props, or null for the generic path.
  */
-export function imageCardModel(
-  block: ToolCallBlock,
-  sessionCwd?: string,
-  home?: string,
-): ImageCardModel | null {
+export function imageCardModel(block: ToolCallBlock): ImageCardModel | null {
   // Result-side only: a running call is not a ToolResultNode and carries no
   // content, so it has no card here.
   if (!('kind' in block) || block.isError) return null
@@ -216,9 +199,8 @@ export function imageCardModel(
   if (call?.name !== 'read_image') return null
   const { file_path: filePath } = call.args
   if (typeof filePath !== 'string' || filePath.trim() === '') return null
-  // The label path: root calls persist it in presentationMeta; a nested call
-  // (dispatched from inside run_code) persists none, so its own file_path
-  // argument fills the label. A root call with missing or malformed meta
+  // Historical nested records without metadata use the authored file_path
+  // for the path. A root call with missing or malformed meta
   // declines — malformed tool data falls back to the generic card, which shows
   // the flattened content rather than an author-typed path.
   const metaPath = imageMeta(block.meta)?.path
@@ -231,67 +213,11 @@ export function imageCardModel(
   // truth; `meta` contributes only the path, which the content does not carry.
   const refs = imageReferences(block.content)
   if (refs === null) return null
-  const text = imageTexts(block.content)
-  if (text === null) return null
+  // A result without the envelope is not a well-formed image read.
+  if (!block.content.some(part => part.type === 'text' && typeof part.text === 'string' && IMAGE_ENVELOPE.test(part.text))) return null
   return {
-    label: abbreviateHomePath(relativizeToCwd(path, sessionCwd), home),
+    path,
     images: refs.map(ref => ({ attachment: ref })),
-    text,
-  }
-}
-
-/**
- * Read the text of every text block of a settled result, joined in order.
- * Unlike imageTexts, this does not require an IMAGE_ENVELOPE.
- * @param content - the settled result's content blocks.
- * @returns the joined text, or empty string when no text block is present.
- */
-function resultTexts(content: readonly unknown[]): string {
-  const parts: string[] = []
-  for (const part of content) {
-    if (typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'text') {
-      const { text } = part as { text?: unknown }
-      if (typeof text === 'string' && text !== '') {
-        parts.push(text)
-      }
-    }
-  }
-  return parts.join('\n')
-}
-
-/**
- * Derive an image card for any settled tool result carrying valid image attachment references.
- *
- * Unlike read_image's `imageCardModel`, this does not demand a specific tool name,
- * presentation metadata, or the strict read_image envelope. It accepts any settled
- * call returning well-formed image blocks. The label is derived from path-shaped
- * arguments (e.g. file_path, path, file), falling back to the first attachment's
- * name, and finally to the tool name.
- *
- * @param block - running or settled Tool block.
- * @param sessionCwd - session workspace root for relative path abbreviation.
- * @param home - host account home for `~` abbreviation.
- * @returns the derived image card model, or null if the block is not a settled result with images.
- */
-export function resultImageCard(
-  block: ToolCallBlock,
-  sessionCwd?: string,
-  home?: string,
-): ImageCardModel | null {
-  if (!('kind' in block) || block.isError) return null
-  const refs = imageReferences(block.content)
-  if (refs === null) return null
-  const call = parsedToolCall(block)
-  const args = call?.args ?? {}
-  const pathArg = ['file_path', 'path', 'filepath', 'file', 'image_path', 'filename']
-    .map(key => args[key])
-    .find((v): v is string => typeof v === 'string' && v.trim() !== '')
-  const label = pathArg !== undefined
-    ? abbreviateHomePath(relativizeToCwd(pathArg, sessionCwd), home)
-    : (refs[0]?.name ?? call?.name ?? '')
-  return {
-    label,
-    images: refs.map(ref => ({ attachment: ref })),
-    text: resultTexts(block.content),
+    extraText: extraTexts(block.content),
   }
 }
