@@ -117,6 +117,7 @@ describe('Compaction Policy reasoningEffort (#6797)', () => {
       },
       { messages: [] },
       mockAgent as never,
+      { provider: 'deepseek', model: 'deepseek-reasoner' },
     )
 
     expect(capturedOptions).toBeDefined()
@@ -159,6 +160,7 @@ describe('Compaction Policy reasoningEffort (#6797)', () => {
       },
       { messages: [] },
       mockAgent as never,
+      { provider: 'deepseek', model: 'deepseek-reasoner' },
     )
 
     expect(capturedOptions).toBeDefined()
@@ -259,6 +261,7 @@ describe('Compaction Fallback Route and Input Bounding (#7423)', () => {
         ],
       },
       mockAgent as never,
+      { provider: 'small-p', model: 'small-m' },
     )
 
     expect(capturedOptions).toBeDefined()
@@ -321,6 +324,7 @@ describe('Compaction Fallback Route and Input Bounding (#7423)', () => {
       },
       { messages: [] },
       mockAgent as never,
+      { provider: 'primary-p', model: 'primary-m' },
     )
 
     expect(streamCalls).toHaveLength(2)

@@ -9,16 +9,19 @@
  * This is a library, not a plugin: transport policy has one answer per process, so there is nothing
  * for a composition to mount, swap, or scope.
  *
- * Five functions, one per way a caller needs the policy — install it, ask how to send one request,
- * build a child's environment, strip the ambient one for a replay, and recycle a dead HTTP/2 pool.
+ * Six functions, one per way a caller needs the policy — install it, build a dispatcher with its
+ * own transport choices, ask how to send one request, build a child's environment, strip the
+ * ambient one for a replay, and recycle a dead HTTP/2 pool.
  * @module @deepseek-ai/dsh-http-proxy
  */
 
 export {
   clearedProxyEnv,
+  createRouteDispatcher,
   installProxyFromEnvironment,
   proxyEnvironmentForChild,
   proxyRouteFor,
   recycleGlobalDispatcher,
+  type DispatcherOptions,
   type ProxyRoute,
 } from './install.ts'

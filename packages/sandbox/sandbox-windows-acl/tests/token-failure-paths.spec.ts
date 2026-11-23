@@ -15,7 +15,8 @@ import koffi from 'koffi'
 import { allocBytes, isNullPtr } from '../src/ffi.ts'
 import type { NativePtr, Win32Bindings } from '../src/ffi.ts'
 import {
-  createRestrictedToken, ensureDesktopLowIntegrity, findLogonSid, makeWellKnownSid, openCurrentProcessToken, restrictTokenIntegrity, setTokenDefaultDaclGrant,
+  createRestrictedToken, ensureDesktopLowIntegrity, findLogonSid,
+  makeWellKnownSid, openCurrentProcessToken, restrictTokenIntegrity, setTokenDefaultDaclGrant,
 } from '../src/token.ts'
 import * as abi from '../src/win32-abi.ts'
 

@@ -5,19 +5,23 @@ import type { ChatNode } from '../contract/chat-nodes.ts'
 
 interface ApprovalToolCall {
   readonly callId?: string
+  readonly name?: string
   readonly argsRaw?: string
 }
 
 /**
- * Extract a shell command from a correlated Tool call when its arguments carry one.
- * Compatible with aliases: command, commandLine, cmd, script.
- * @param call - Tool call arguments, when a correlated call exists.
- * @returns command text, or undefined for absent, malformed, or unrelated arguments.
+ * Extract the command line from a correlated Tool call: a shell `command` (or aliases `commandLine`, `cmd`, `script`),
+ * or the text `terminal_send` types into a terminal.
+ * @param call - Tool call name and arguments, when a correlated call exists.
+ * @returns command text, or undefined for absent, empty, malformed, or unrelated arguments.
  */
 export function commandOf(call: ApprovalToolCall | undefined): string | undefined {
   if (call === undefined || typeof call.argsRaw !== 'string') return undefined
   try {
     const args = JSON.parse(call.argsRaw) as Record<string, unknown>
+    if (call.name === 'terminal_send') {
+      return typeof args.text === 'string' && args.text.length > 0 ? args.text : undefined
+    }
     if (typeof args.command === 'string' && args.command.trim().length > 0) return args.command
     if (typeof args.commandLine === 'string' && args.commandLine.trim().length > 0) return args.commandLine
     if (typeof args.cmd === 'string' && args.cmd.trim().length > 0) return args.cmd
@@ -33,9 +37,11 @@ interface InterruptedError {
 }
 
 interface BlockLike {
+  name?: unknown
   argsRaw?: unknown
   call?: {
     callId?: unknown
+    name?: unknown
     argsRaw?: unknown
   }
   callId?: unknown
@@ -59,6 +65,14 @@ function extractArgsRaw(block: unknown): string | undefined {
   return undefined
 }
 
+function extractToolName(block: unknown): string | undefined {
+  if (!block || typeof block !== 'object') return undefined
+  const b = block as BlockLike
+  if (typeof b.name === 'string') return b.name
+  if (b.call && typeof b.call === 'object' && typeof b.call.name === 'string') return b.call.name
+  return undefined
+}
+
 /**
  * Render the command of the Chat Tool node correlated with an approval.
  * @param props - Approval identity and Session-standard Chat selector hook.
@@ -75,7 +89,8 @@ export function ApprovalCommand({ callId, useChat }: PropsRuntime<'conversation.
       if (isPendingOrInterrupted && (b.callId === callId || b.call?.callId === callId)) {
         const raw = extractArgsRaw(b)
         if (raw) {
-          const cmd = commandOf({ argsRaw: raw })
+          const name = extractToolName(b)
+          const cmd = commandOf({ ...(name === undefined ? {} : { name }), argsRaw: raw })
           if (cmd) return cmd
         }
       }

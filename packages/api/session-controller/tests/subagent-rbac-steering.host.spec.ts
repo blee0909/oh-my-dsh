@@ -113,7 +113,7 @@ async function setupRbacHarness() {
     admitPromptContent: (parts: unknown) => Promise.resolve(parts as never),
   } as never)
 
-  const remote = createSessionTestRemote(ctx, {
+  const remote = await createSessionTestRemote(ctx, {
     cwd: '/workspace',
     defaultModelSelection: () => ({ provider: 'mock-provider', model: 'mock-chat' }),
   })
@@ -160,6 +160,9 @@ describe('Subagent Action-Level RBAC and Steering', () => {
       status: 'running',
       ctx,
       inbox: createMockInbox(),
+      model: {
+        select: (selection: unknown) => childSession.append('model/selection', selection as never),
+      },
       steer: vi.fn(),
       followup: vi.fn(),
       cancel: vi.fn(),
@@ -192,6 +195,9 @@ describe('Subagent Action-Level RBAC and Steering', () => {
       status: 'running',
       ctx,
       inbox: createMockInbox(),
+      model: {
+        select: (selection: unknown) => childSession.append('model/selection', selection as never),
+      },
       steer: vi.fn(),
       followup: vi.fn(),
       cancel: vi.fn(),
@@ -260,6 +266,9 @@ describe('Subagent Action-Level RBAC and Steering', () => {
       status: 'idle',
       ctx,
       inbox: createMockInbox(),
+      model: {
+        select: (selection: unknown) => childSession.append('model/selection', selection as never),
+      },
     } as unknown as Agent
     vi.spyOn(ctx.agents, 'resume').mockResolvedValueOnce({ agent: resumedAgent } as never)
 

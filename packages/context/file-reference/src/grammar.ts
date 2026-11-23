@@ -4,17 +4,7 @@
  * @module @deepseek-ai/dsh-file-reference/grammar
  */
 
-import type { FileReferenceCandidate } from './types.ts'
-
-/** Active `@` token ending at the editor cursor. */
-export interface ActiveAtToken {
-  /** Complete token replaced when the user accepts a completion. */
-  prefix: string
-  /** Path query after `@` or `@"`. */
-  query: string
-  /** Whether the user opened a quoted path. */
-  quoted: boolean
-}
+import type { ActiveAtToken, FileReferenceCandidate } from './types.ts'
 
 /**
  * Character boundary preceding an `@` token:

@@ -63,7 +63,7 @@ async function setupCascadeHarness() {
     admitPromptContent: (_parts: unknown) => Promise.resolve([]),
   } as never)
 
-  const remote = createSessionTestRemote(ctx, {
+  const remote = await createSessionTestRemote(ctx, {
     cwd: '/workspace',
     defaultModelSelection: () => ({ provider: 'mock-provider', model: 'mock-chat' }),
   })

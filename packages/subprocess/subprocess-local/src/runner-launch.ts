@@ -128,7 +128,7 @@ export function runnerStdio(
   spec: SubprocessSpawnSpec,
   ipc: boolean,
   stdinCarrier: 'pipe' | number = 'pipe',
-): StdioOptions {
+): Exclude<StdioOptions, string> {
   const targetStdio: StdioOptions = [
     spec.stdio.stdin === 'ignore' ? 'ignore' : 'pipe',
     spec.stdio.stdout === 'inherit' ? 'inherit' : 'pipe',

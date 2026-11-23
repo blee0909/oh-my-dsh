@@ -18,6 +18,10 @@ import { mathFromMarkdown } from 'mdast-util-math'
 import { gfm } from 'micromark-extension-gfm'
 import { cjkFriendlyStrong } from './cjkFriendlyStrong.ts'
 import { mathCompatibility } from './mathCompatibility.ts'
+import { windowsPathDestinations } from './windows-path-destinations.ts'
+
+/** GFM strikethrough requires `~~`; a single `~` stays literal, as in ranges such as `10~20`. */
+const gfmOptions = { singleTilde: false }
 
 /**
  * Parse GFM markdown (the streaming arm's grammar: no math, so incomplete
@@ -27,8 +31,8 @@ import { mathCompatibility } from './mathCompatibility.ts'
  */
 export function parseGfm(text: string): Root {
   return recoverLocalImages(fromMarkdown(text, {
-    extensions: [gfm({ singleTilde: false }), cjkFriendlyStrong()],
-    mdastExtensions: [gfmFromMarkdown()],
+    extensions: [gfm(gfmOptions), cjkFriendlyStrong()],
+    mdastExtensions: [gfmFromMarkdown(), windowsPathDestinations()],
   }), text)
 }
 
@@ -40,14 +44,14 @@ export function parseGfm(text: string): Root {
  */
 export function parseGfmWithMath(text: string): Root {
   const root = fromMarkdown(text, {
-    extensions: [gfm({ singleTilde: false }), cjkFriendlyStrong(), mathCompatibility()],
-    mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown()],
+    extensions: [gfm(gfmOptions), cjkFriendlyStrong(), mathCompatibility()],
+    mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown(), windowsPathDestinations()],
   })
   const fallbackOffsets = findUnclosedMathOffsets(root, text)
   if (fallbackOffsets.size === 0) return recoverLocalImages(root, text)
   return recoverLocalImages(fromMarkdown(text, {
-    extensions: [gfm({ singleTilde: false }), cjkFriendlyStrong(), mathCompatibility({ fallbackOffsets })],
-    mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown()],
+    extensions: [gfm(gfmOptions), cjkFriendlyStrong(), mathCompatibility({ fallbackOffsets })],
+    mdastExtensions: [gfmFromMarkdown(), mathFromMarkdown(), windowsPathDestinations()],
   }), text)
 }
 
