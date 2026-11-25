@@ -10,7 +10,8 @@ import {
   BlockAssembler,
   LlmError,
   CONTEXT_WINDOW_EXCEEDED_CODE,
-  type ReasoningEffortId,
+  ReasoningEffortId,
+  type LlmResolvedModelInfo,
 } from '@deepseek-ai/dsh-llm'
 import { deepFreeze } from '@deepseek-ai/dsh-util-values'
 import type {
@@ -264,6 +265,7 @@ export async function summarizeWithLlm(
   const executeCall = async (
     callTarget: { provider: string; model: string },
     callMessages: readonly Message[],
+    callInfo?: LlmResolvedModelInfo,
   ): Promise<{ assembler: BlockAssembler; provider: string; model: string }> => {
     const assembler = new BlockAssembler()
     const requestMessages: RequestMessage[] = [
@@ -273,6 +275,10 @@ export async function summarizeWithLlm(
         content: [{ type: 'text', text: COMPACTION_INSTRUCTION }],
       }),
     ]
+    const resolvedEffort = config.reasoningEffort
+      ?? (callInfo?.reasoning?.efforts.some(entry => entry.id === 'off')
+        ? ReasoningEffortId('off')
+        : undefined)
     const options: GenerateOptions = {
       provider: callTarget.provider,
       model: callTarget.model,
@@ -280,7 +286,7 @@ export async function summarizeWithLlm(
       toolHistory: agent.session.toolHistory?.(),
       ...input.tools === undefined ? {} : { tools: [...input.tools] },
       maxTokens: config.maxTokens,
-      ...config.reasoningEffort !== undefined ? { reasoningEffort: config.reasoningEffort } : {},
+      ...resolvedEffort !== undefined ? { reasoningEffort: resolvedEffort } : {},
       sessionId: agent.session.id,
       purpose: 'compaction',
       ...signal === undefined ? {} : { signal },
@@ -297,7 +303,7 @@ export async function summarizeWithLlm(
 
   let execution: { assembler: BlockAssembler; provider: string; model: string }
   try {
-    execution = await executeCall(target, initialMessages)
+    execution = await executeCall(target, initialMessages, info)
   } catch (error: unknown) {
     if (signal?.aborted) throw error
     const isOverflow = isContextOverflow(error)
@@ -318,7 +324,17 @@ export async function summarizeWithLlm(
         `compaction: summarization route ${target.provider}/${target.model} context overflow; `
         + `falling back to ${fallbackTarget.provider}/${fallbackTarget.model}`,
       )
-      execution = await executeCall(fallbackTarget, input.messages)
+      const fallbackInfo = typeof ctx.llm?.resolveModelInfo === 'function'
+        ? await ctx.llm.resolveModelInfo(fallbackTarget.provider, fallbackTarget.model, signal).catch(() => undefined)
+        : undefined
+      const fallbackWindow = fallbackInfo?.context?.contextWindow
+      const fallbackMessages = fallbackWindow === undefined
+        ? initialMessages
+        : boundSummarizationMessages(
+          input.messages,
+          Math.max(200, fallbackWindow - config.maxTokens - Math.min(2000, Math.floor(fallbackWindow * 0.1))),
+        )
+      execution = await executeCall(fallbackTarget, fallbackMessages, fallbackInfo)
     } else if (isOverflow) {
       ctx.logger?.warn?.(
         `compaction: summarization route ${target.provider}/${target.model} context overflow; `
@@ -326,7 +342,7 @@ export async function summarizeWithLlm(
       )
       const reducedBudget = Math.max(100, Math.floor((inputBudget ?? 2000) * 0.5))
       const reducedMessages = boundSummarizationMessages(input.messages, reducedBudget)
-      execution = await executeCall(target, reducedMessages)
+      execution = await executeCall(target, reducedMessages, info)
     } else {
       throw error
     }

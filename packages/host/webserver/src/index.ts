@@ -122,16 +122,7 @@ export interface WebRoute {
   handler: (req: IncomingMessage, res: ServerResponse, peer?: PeerScope) => void | Promise<void>
   /** Defaults to required. Anonymous handlers may receive no Peer. */
   auth?: WebAuthenticationRule
-  /**
-   * Whether this route is publicly accessible (legacy alias for `auth: 'anonymous'`).
-   */
-  isPublic?: boolean
 }
-
-/** Authenticator callback for non-public web routes. Returns boolean or HTTP error status code. */
-export type WebAuthenticator = (
-  req: IncomingMessage,
-) => boolean | number | undefined | Promise<boolean | number | undefined>
 
 /**
  * Answers one GET or HEAD request with a Fetch response and its admitted Peer.
@@ -477,9 +468,6 @@ export class WebServer extends Service {
   private listenedPort: number | undefined
   private readonly gzip: NodeMiddleware | undefined
   private readonly tlsConfig: TlsConfig | undefined
-  private authenticator: WebAuthenticator | undefined
-
-
 
   constructor(ctx: Context, private config: Config) {
     super(ctx, 'webServer')
@@ -614,19 +602,6 @@ export class WebServer extends Service {
       const at = this.indexTaps.indexOf(transform)
       if (at !== -1) this.indexTaps.splice(at, 1)
     }
-  }
-
-  /**
-   * Register a global authenticator for non-public routes (Secure by Default).
-   * @param authenticator - callback validating incoming requests.
-   * @returns the disposer clearing the authenticator.
-   */
-  setAuthenticator(authenticator: WebAuthenticator): () => void {
-    if (this.authenticator !== undefined) {
-      throw new Error('webserver: authenticator already registered')
-    }
-    this.authenticator = authenticator
-    return () => { this.authenticator = undefined }
   }
 
   /** Listen; resolves once the socket is bound (rejection = FAILED fiber). */

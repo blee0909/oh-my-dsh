@@ -390,8 +390,19 @@
   mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
 }
 
-.tab:has(.tabClose) {
-  padding-right: 28px;
+/* While the close shows, the title is gone under the close's circle and fades
+   out over the 16px before it: the circle spans the chip's last 24px and the
+   title ends 10px inside the chip, so the title's last 14px are under it.
+   Quiet and floating titles have no overlaid close. */
+.tab:not(.floatTitle, .tabQuiet):focus-within .tabTitle,
+.tabActive:not(.tabQuiet) .tabTitle {
+  mask-image: linear-gradient(to right, black calc(100% - 30px), transparent calc(100% - 14px));
+}
+
+@media (hover: hover) {
+  .tab:not(.floatTitle, .tabQuiet):hover .tabTitle {
+    mask-image: linear-gradient(to right, black calc(100% - 30px), transparent calc(100% - 14px));
+  }
 }
 
 /* A 20px icon button inset 4px from the chip's end, holding a 14px glyph in

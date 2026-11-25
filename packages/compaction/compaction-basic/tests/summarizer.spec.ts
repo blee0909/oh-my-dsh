@@ -84,7 +84,7 @@ describe('Compaction Policy reasoningEffort (#6797)', () => {
     expect(overriddenPolicy.reasoningEffort).toBe('high')
   })
 
-  it('summarizeWithLlm omits reasoningEffort by default and retains purpose compaction', async () => {
+  it('summarizeWithLlm omits reasoningEffort when model does not advertise off and retains purpose compaction', async () => {
     const { summarizeWithLlm } = await import('../src/summarizer.ts')
     let capturedOptions: GenerateOptions | undefined
 
@@ -123,6 +123,56 @@ describe('Compaction Policy reasoningEffort (#6797)', () => {
     expect(capturedOptions).toBeDefined()
     expect(capturedOptions?.purpose).toBe('compaction')
     expect(capturedOptions?.reasoningEffort).toBeUndefined()
+  })
+
+  it('summarizeWithLlm defaults reasoningEffort to off when model supports off (#6797)', async () => {
+    const { summarizeWithLlm } = await import('../src/summarizer.ts')
+    let capturedOptions: GenerateOptions | undefined
+
+    const mockCtx = {
+      llm: {
+        resolveModelInfo: async () => ({
+          provider: 'deepseek',
+          id: 'deepseek-reasoner',
+          name: 'DeepSeek Reasoner',
+          reasoning: {
+            efforts: [{ id: 'off' }, { id: 'high' }],
+            defaultEffort: 'high',
+          },
+        }),
+        stream: (opts: GenerateOptions) => {
+          capturedOptions = opts
+          return (async function* () {
+            yield { type: 'text-delta' as const, text: '## Primary Request and Intent\n- Done' }
+            yield { type: 'finish' as const, reason: { kind: 'stop' as const } }
+          })()
+        },
+      },
+    }
+
+    const mockAgent = {
+      session: {
+        id: 'test-session',
+        requestHeader: () => ({ config: { provider: 'deepseek', model: 'deepseek-reasoner' } }),
+      },
+      options: {},
+    }
+
+    await summarizeWithLlm(
+      mockCtx as never,
+      {
+        summarizationProvider: '',
+        summarizationModel: '',
+        maxTokens: 8192,
+      },
+      { messages: [] },
+      mockAgent as never,
+      { provider: 'deepseek', model: 'deepseek-reasoner' },
+    )
+
+    expect(capturedOptions).toBeDefined()
+    expect(capturedOptions?.purpose).toBe('compaction')
+    expect(capturedOptions?.reasoningEffort).toBe('off')
   })
 
   it('summarizeWithLlm passes explicit reasoningEffort to GenerateOptions', async () => {

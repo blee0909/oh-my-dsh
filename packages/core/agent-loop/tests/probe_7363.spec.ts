@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { deriveBrowserTimeZoneContext } from '../../../context/time-context/src/request-zone.ts'
 import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
@@ -43,6 +44,7 @@ describe('Discussions #7363: bare string and malformed input defense in agent.fo
     await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SystemPrompt, { personaPrefix: '', personaSuffix: '' })
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeToolExecutor)
     await ctx.plugin(timeContext, { timeZone: 'UTC' })
     await ctx.plugin(AgentRegistry)
     await ctx.plugin(AgentLoop, { agents: [] })
@@ -83,6 +85,7 @@ describe('Discussions #7363: bare string and malformed input defense in agent.fo
     await ctx.plugin(SessionProjectionRegistry)
     await ctx.plugin(SystemPrompt, { personaPrefix: '', personaSuffix: '' })
     await ctx.plugin(ToolRuntime)
+    await ctx.plugin(NativeToolExecutor)
     await ctx.plugin(timeContext, { timeZone: 'UTC' })
     await ctx.plugin(AgentRegistry)
     await ctx.plugin(AgentLoop, { agents: [] })
