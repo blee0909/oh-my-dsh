@@ -487,5 +487,54 @@ describe('Layer 1 Outbound Message Transformation (transformMessages)', () => {
       expect(resultBlock.text).toContain('DSH System Guard: Tool output truncated')
       expect(resultBlock.text.length).toBeLessThan(bigText.length)
     })
+
+    it('sanitizes lone surrogates inside developer messages', () => {
+      const devMsg = {
+        id: 'dev-1',
+        role: 'developer',
+        source: { kind: 'plugin', plugin: 'test' },
+        content: [
+          { type: 'text', text: 'dev\uD800note' },
+          { type: 'tool-addition', toolName: 'read' },
+        ],
+      } as unknown as Parameters<typeof transformMessages>[0][number]
+
+      const transformed = transformMessages([devMsg])
+      expect(transformed).toHaveLength(1)
+      expect((transformed[0]!.content[0] as TextBlock).text).toBe('dev\uFFFDnote')
+      expect(transformed[0]!.content[1]).toEqual({ type: 'tool-addition', toolName: 'read' })
+    })
+
+    it('keeps replayState.blocks index-aligned when stripping empty text blocks', () => {
+      const msgWithReplay = createAssistantMessage({
+        content: [
+          { type: 'text', text: '' },
+          { type: 'reasoning', text: 'signed thought' },
+          { type: 'text', text: 'final answer' },
+        ],
+        source: {
+          provider: 'deepseek-official',
+          model: 'deepseek-reasoner',
+          replayState: {
+            response: { kind: 'deepseek-messages', version: 1, model: 'deepseek-reasoner' },
+            blocks: [
+              { type: 'text' },
+              { type: 'reasoning', signature: 'sig-123' },
+              { type: 'text' },
+            ],
+          },
+        } as never,
+      })
+
+      const transformed = transformMessages([msgWithReplay])
+      const updated = transformed[0]!
+      expect(updated.content).toHaveLength(2)
+      expect(updated.content[0]).toEqual({ type: 'reasoning', text: 'signed thought' })
+      const replay = (updated.source as { replayState: { blocks: Array<{ type: string; signature?: string }> } }).replayState
+      expect(replay.blocks).toEqual([
+        { type: 'reasoning', signature: 'sig-123' },
+        { type: 'text' },
+      ])
+    })
   })
 })

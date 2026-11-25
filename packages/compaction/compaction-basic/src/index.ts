@@ -8,7 +8,7 @@ import { Context, Service } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { CompactionEngine, ManualCompactionError } from '@deepseek-ai/dsh-compaction'
 import type { CompactionResult, CompactionTrigger } from '@deepseek-ai/dsh-compaction'
-import type { EpochHeader, Session, SessionSeq } from '@deepseek-ai/dsh-session'
+import { SessionSeq, type EpochHeader, type Session } from '@deepseek-ai/dsh-session'
 import type { ProjectionHandle } from '@deepseek-ai/dsh-session-projection'
 import { CONTEXT_WINDOW_EXCEEDED_CODE, LlmError } from '@deepseek-ai/dsh-llm'
 import { assertNever } from '@deepseek-ai/dsh-util-values'
@@ -327,11 +327,9 @@ export class BasicCompactionEngine extends CompactionEngine {
         this.ctx.get('toolResultPruner')?.pruneSession(agent.session)
         const measurement = this.ctx.tokenMeter.measure(agent.session)
         // Protect active turn from being swallowed by finding the active turn's starting seq
-        // oxlint-disable-next-line typescript/no-deprecated -- Existing Session history read; migration deferred.
-        const events = agent.session.snapshotEvents()
         let activeTurnStartSeq: SessionSeq | undefined
-        for (let i = events.length - 1; i >= 0; i -= 1) {
-          const ev = events[i]
+        for (let seq = agent.session.seq - 1; seq >= 0; seq -= 1) {
+          const ev = agent.session.eventAt(SessionSeq(seq))
           if (ev && ev.type === 'turn/start') {
             activeTurnStartSeq = ev.seq
             break

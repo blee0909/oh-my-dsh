@@ -21,10 +21,11 @@ import { z } from 'zod'
  * Normalize arbitrary caller input or durable items into a well-formed UserMessage.
  * Defends against bare strings, missing source, or malformed content blocks.
  */
-export function normalizeUserMessage(input: unknown): UserMessage {
+export function normalizeUserMessage(input: unknown, fallbackId?: string): UserMessage {
+  const resolveId = (): MessageId => MessageId(fallbackId ?? randomUUID())
   if (typeof input === 'string') {
     return {
-      id: MessageId(randomUUID()),
+      id: resolveId(),
       role: 'user',
       content: [{ type: 'text', text: input }],
       source: { kind: 'user' },
@@ -44,7 +45,7 @@ export function normalizeUserMessage(input: unknown): UserMessage {
       return input as UserMessage
     }
 
-    const id = hasValidId ? candidate.id as MessageId : MessageId(randomUUID())
+    const id = hasValidId ? candidate.id as MessageId : resolveId()
     const source = hasValidSource ? candidate.source as MessageSource : { kind: 'user' }
     let content: readonly ContentBlock[]
     if (hasValidContent) {
@@ -68,7 +69,7 @@ export function normalizeUserMessage(input: unknown): UserMessage {
     ? String(input)
     : ''
   return {
-    id: MessageId(randomUUID()),
+    id: resolveId(),
     role: 'user',
     content: [{ type: 'text', text }],
     source: { kind: 'user' },
@@ -98,7 +99,7 @@ export const inboxProjectionDefinition = {
         throw new Error('invalid inbox splice')
       }
       const rawInserted = splice.inserted
-      const normalizedInserted = rawInserted.map(item => normalizeUserMessage(item))
+      const normalizedInserted = rawInserted.map((item, idx) => normalizeUserMessage(item, `inbox-normalized-${event.seq}-${idx}`))
       const next = inbox.toSpliced(splice.start, removedCount, ...normalizedInserted)
       const ids = new Set<string>()
       for (const message of splice.target === 'next-turn'

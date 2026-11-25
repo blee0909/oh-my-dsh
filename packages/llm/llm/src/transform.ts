@@ -143,6 +143,28 @@ export function coalesceBlocks(
 }
 
 /**
+ * Keep `replayState.blocks` index-aligned with `message.content` when blocks are
+ * filtered or promoted so provider signature replay stays synchronized.
+ */
+function syncReplayState<S extends Message['source']>(
+  source: S,
+  mapBlocks: (blocks: readonly unknown[]) => unknown[],
+): S {
+  if (typeof source !== 'object' || source === null || !('replayState' in source)) return source
+  const replayState = (source as { replayState?: unknown }).replayState
+  if (typeof replayState !== 'object' || replayState === null || !('blocks' in replayState)) return source
+  const blocks = (replayState as { blocks?: unknown }).blocks
+  if (!Array.isArray(blocks)) return source
+  return {
+    ...source,
+    replayState: {
+      ...replayState,
+      blocks: mapBlocks(blocks),
+    },
+  } as S
+}
+
+/**
  * Transform durable conversation messages into clean, wire-safe outbound messages.
  * Pure function: returns the original `messages` array if untouched (reference invariance),
  * or a clean new message array if defensive transformations were applied.
@@ -299,7 +321,8 @@ export function transformMessages(
       // Defense (#5773): Filter out empty text blocks that crash Claude API (HTTP 400 text cannot be empty)
       // Defense (#9089): Filter/clean lone surrogates across text and reasoning blocks
       const hasIllFormed = msg.content.some(b => (b.type === 'text' || b.type === 'reasoning') && !b.text.isWellFormed())
-      const hasEmptyText = msg.content.some(b => b.type === 'text' && b.text.trim().length === 0)
+      const keepMask = msg.content.map(b => !(b.type === 'text' && b.text.trim().length === 0))
+      const hasEmptyText = keepMask.some(keep => !keep)
       let sanitizedContent = msg.content
       if (hasIllFormed) {
         modified = true
@@ -311,7 +334,7 @@ export function transformMessages(
         })
       }
       if (hasEmptyText) {
-        sanitizedContent = sanitizedContent.filter(b => !(b.type === 'text' && b.text.trim().length === 0))
+        sanitizedContent = sanitizedContent.filter((_, index) => keepMask[index])
       }
 
       const toolCalls = sanitizedContent.filter(b => b.type === 'tool-call')
@@ -322,9 +345,15 @@ export function transformMessages(
       if (toolCalls.length > 0 || textBlocks.length > 0) {
         if (hasEmptyText || hasIllFormed) {
           modified = true
+          const syncedSource = hasEmptyText
+            ? syncReplayState(msg.source, blocks => blocks.length === msg.content.length
+              ? blocks.filter((_, index) => keepMask[index])
+              : [...blocks])
+            : msg.source
           staged.push(
             freezeMessage({
               ...msg,
+              source: syncedSource,
               content: sanitizedContent,
             }),
           )
@@ -349,9 +378,16 @@ export function transformMessages(
         newContent.push({ type: 'text', text: FALLBACK_EMPTY_ASSISTANT_TEXT })
       }
 
+      const syncedSource = syncReplayState(msg.source, (blocks) => {
+        if (blocks.length !== msg.content.length) return [...blocks]
+        const retained = blocks.filter((_, index) => msg.content[index]?.type === 'reasoning')
+        return reasoningBlocks.length > 0 ? [{ type: 'text' }, ...retained] : [{ type: 'text' }]
+      })
+
       staged.push(
         freezeMessage({
           ...msg,
+          source: syncedSource,
           content: newContent,
         }),
       )
@@ -373,6 +409,23 @@ export function transformMessages(
           freezeMessage({
             ...msg,
             content: sanitized.blocks,
+          }),
+        )
+      } else {
+        staged.push(msg)
+      }
+      continue
+    }
+
+    // 4. Developer messages (e.g. tool-addition / tool-removal / developer directives)
+    if (msg.role === 'developer') {
+      const hasIllFormed = msg.content.some(b => b.type === 'text' && !b.text.isWellFormed())
+      if (hasIllFormed) {
+        modified = true
+        staged.push(
+          freezeMessage({
+            ...msg,
+            content: msg.content.map(b => b.type === 'text' && !b.text.isWellFormed() ? { ...b, text: b.text.toWellFormed() } : b),
           }),
         )
       } else {
