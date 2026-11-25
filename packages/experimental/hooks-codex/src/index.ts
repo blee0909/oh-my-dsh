@@ -290,12 +290,6 @@ function lastTurn(ctx: Context, agent: Agent | undefined): number {
   if (!agent) return 0
   return ctx.agents.turnBoundaryOf(agent.session).lastTurn
 }
-
-/** Flatten content blocks to the text a hook payload carries (the common case). */
-export function blocksToText(content: ContentBlock[] | undefined | null): string {
-  if (!Array.isArray(content)) return ''
-  return content.filter((b): b is Extract<ContentBlock, { type: 'text' }> => b?.type === 'text').map(b => b.text).join('')
-}
 /* jscpd:ignore-end */
 
 /** Base fields on every Codex payload (no turn_id). */

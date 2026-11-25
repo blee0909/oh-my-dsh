@@ -212,31 +212,6 @@ export function isContentFilterError(detail: string): boolean {
 }
 
 /**
- * Extract retry delay in milliseconds from provider error payload or headers when available.
- */
-export function extractRetryDelayMs(detail: string): number | undefined {
-  // 1. Matches "retryDelay: 10s" or "retryDelay: 250ms" or "retryDelay: 1.5s"
-  const retryDelayMatch = detail.match(/\bretryDelay:\s*([0-9.]+)\s*(s|ms)\b/i)
-  const rawDelay = retryDelayMatch?.[1]
-  const rawUnit = retryDelayMatch?.[2]
-  if (rawDelay !== undefined && rawUnit !== undefined) {
-    const num = parseFloat(rawDelay)
-    const unit = rawUnit.toLowerCase()
-    return unit === 's' ? Math.round(num * 1000) : Math.round(num)
-  }
-
-  // 2. Matches "Retry-After: 15"
-  const retryAfterMatch = detail.match(/\bRetry-After:\s*([0-9.]+)\b/i)
-  const rawAfter = retryAfterMatch?.[1]
-  if (rawAfter !== undefined) {
-    const num = parseFloat(rawAfter)
-    return Math.round(num * 1000)
-  }
-
-  return undefined
-}
-
-/**
  * Render a thrown value with its full `cause` chain and AggregateError
  * members, so transport wrappers like undici's `TypeError: fetch failed`
  * surface the underlying failure instead of masking it. Plain structured

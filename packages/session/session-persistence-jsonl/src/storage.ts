@@ -431,8 +431,6 @@ export interface PendingSession {
   readonly inheritedEventCount: SessionLogOffset
 }
 
-import { SessionFileLocker } from './file-lock.ts'
-
 /**
  * The JSONL backend's in-process bookkeeping: the single active writer per
  * session id (doubling as the live event router), the open-handle set the
@@ -445,7 +443,6 @@ export class JsonlBackendTracker {
   /** `null` marks a claim whose handle is still being constructed. */
   private readonly writers = new Map<SessionId, JsonlSessionHandle | null>()
   private readonly pending = new Map<SessionId, PendingSession>()
-  private readonly lockers = new Map<SessionId, SessionFileLocker>()
   private counter = 0
 
   /** @param name - backend label used in in-memory revision tokens and teardown errors. */
@@ -474,18 +471,12 @@ export class JsonlBackendTracker {
   }
 
   /**
-   * Claim write ownership for an existing session with optional cross-process advisory lock.
+   * Claim write ownership for an existing session.
    * @param id - the session to claim.
-   * @param lockDir - optional filesystem directory to enforce cross-process exclusivity.
    * @throws {SessionAlreadyOwnedError} when an active write handle exists.
    */
-  claimWrite(id: SessionId, lockDir?: string): void {
+  claimWrite(id: SessionId): void {
     if (this.writers.has(id)) throw new SessionAlreadyOwnedError(id)
-    if (lockDir !== undefined) {
-      const locker = new SessionFileLocker(id, lockDir)
-      locker.acquire()
-      this.lockers.set(id, locker)
-    }
     this.writers.set(id, null)
   }
 
@@ -494,8 +485,6 @@ export class JsonlBackendTracker {
    * @param id - the session whose claim is dropped.
    */
   releaseClaim(id: SessionId): void {
-    this.lockers.get(id)?.release()
-    this.lockers.delete(id)
     this.writers.delete(id)
   }
 
@@ -564,8 +553,6 @@ export class JsonlBackendTracker {
   release(handle: JsonlSessionHandle, materialized: boolean): void {
     this.openHandles.delete(handle)
     if (handle.access !== 'write') return
-    this.lockers.get(handle.id)?.release()
-    this.lockers.delete(handle.id)
     this.writers.delete(handle.id)
     if (!materialized) this.pending.delete(handle.id)
   }

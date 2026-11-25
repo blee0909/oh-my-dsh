@@ -77,7 +77,6 @@ interface PreparedLegacySession {
 
 export type { JsonlCompression } from './format.ts'
 export type { SessionPersistenceListingFault } from '@deepseek-ai/dsh-session-persistence'
-export { SessionFileLocker, type SessionLockOptions, type LockPayload } from './file-lock.ts'
 
 /**
  * Internal handoff-reuse policy, not deployment configuration: a cold
@@ -522,7 +521,7 @@ export class JsonlSessionPersistence extends SessionPersistence {
     }
     // A pending entry always belongs to an ACTIVE creator handle (close erases
     // it), so the claim below rejects that case as already owned.
-    this.tracker.claimWrite(id, this.root)
+    this.tracker.claimWrite(id)
     let lease: SessionWriteLease | undefined
     try {
       const resolved = await this.findLog(id, options?.signal)

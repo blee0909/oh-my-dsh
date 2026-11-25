@@ -4,7 +4,6 @@ import {
   isContentFilterError,
   isQuotaExceededError,
   isTransientRateLimitError,
-  extractRetryDelayMs,
 } from '../src/error.ts'
 
 describe('Layer 1 Error Classification & Transient Rate Limit (#5465)', () => {
@@ -51,25 +50,6 @@ describe('Layer 1 Error Classification & Transient Rate Limit (#5465)', () => {
     ])('correctly classifies %s as transient rate limit', (_name, rawError, expected) => {
       expect(isTransientRateLimitError(rawError)).toBe(expected)
       expect(isQuotaExceededError(rawError)).toBe(false)
-    })
-  })
-
-  describe('extractRetryDelayMs', () => {
-    it('extracts seconds delay from Gemini retryDelay format', () => {
-      expect(extractRetryDelayMs('quotaId: ... retryDelay: 10s')).toBe(10000)
-      expect(extractRetryDelayMs('retryDelay: 1.5s')).toBe(1500)
-    })
-
-    it('extracts milliseconds delay from retryDelay format', () => {
-      expect(extractRetryDelayMs('retryDelay: 500ms')).toBe(500)
-    })
-
-    it('extracts Retry-After header format', () => {
-      expect(extractRetryDelayMs('HTTP 429 Retry-After: 15')).toBe(15000)
-    })
-
-    it('returns undefined when no delay hint is present', () => {
-      expect(extractRetryDelayMs('HTTP 429: slow down')).toBeUndefined()
     })
   })
 

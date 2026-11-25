@@ -5,16 +5,6 @@
 
 import { execFile } from 'node:child_process'
 
-/** Options controlling native process invocation behavior. */
-export interface NativeCommandOptions {
-  /**
-   * Whether to hide the process window on Windows.
-   * Defaults to `true` (suppressing flashes for console utilities like powershell.exe and wslpath).
-   * Set to `false` for GUI openers like explorer.exe so windows are created visible.
-   */
-  readonly windowsHide?: boolean
-}
-
 /** Testable command boundary; native implementations never invoke a shell. */
 export type NativeCommandRunner = (
   command: string,

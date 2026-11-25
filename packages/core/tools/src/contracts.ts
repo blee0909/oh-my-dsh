@@ -25,10 +25,6 @@ export interface ToolOutputDefinition {
 
 /** A registered tool: its schema plus the execution function. */
 export interface ToolDefinition extends ToolSchema {
-  /** Operational tier: 'core' (always active in wire schemas) or 'on-demand' (summarized until hydrated). */
-  tier?: 'core' | 'on-demand'
-  /** One-line summary for Tier-1 tool catalog. */
-  summary?: string
   /** Mandatory canonical output declaration. */
   readonly output: ToolOutputDefinition
   /**

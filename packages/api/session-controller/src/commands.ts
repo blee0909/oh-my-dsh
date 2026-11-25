@@ -299,9 +299,6 @@ export class SessionCommandController {
           ...(composition.agentPreset === undefined
             ? {}
             : { agentPreset: composition.agentPreset }),
-          ...(request.workspaceMode === undefined
-            ? {}
-            : { workspaceMode: request.workspaceMode }),
         },
         agentOptions: {
           provider: selected.provider,

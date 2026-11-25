@@ -270,12 +270,11 @@ export function pluginRecordOf(event: SessionEvent): PluginRecord | undefined {
 function snapshotAppend(
   type: SessionEventType,
   data: SessionEventMap[SessionEventType] | undefined,
-  opts: (SurfaceIntent & { ignorable?: boolean }) | { ignorable?: boolean } | undefined,
+  opts: SurfaceIntent | undefined,
   subject: string,
 ) {
-  const surfaceOp = opts && 'surfaceOp' in opts ? opts.surfaceOp : undefined
-  const sourceEventSeqs = opts && 'sourceEventSeqs' in opts ? opts.sourceEventSeqs : undefined
-  const isIgnorable = opts?.ignorable === true ? true : undefined
+  const surfaceOp = opts?.surfaceOp
+  const sourceEventSeqs = opts?.sourceEventSeqs
   const dataSnapshot = snapshotJsonValue(data)
   if (dataSnapshot === undefined) throw new Error(`${subject} carries non-JSON-serializable data`)
   const surface = snapshotJsonValue({
@@ -283,20 +282,13 @@ function snapshotAppend(
     ...surfaceOp === undefined ? {} : { surfaceOp },
   })
   if (surface === undefined) throw new Error(`${subject} carries non-JSON-serializable surface metadata`)
-  return { type, data: dataSnapshot, surface, isIgnorable }
+  return { type, data: dataSnapshot, surface }
 }
 
 /** Construct and validate one live event from detached inputs. */
 function createAppendEvent(snapshot: ReturnType<typeof snapshotAppend>, seq: SessionSeq): SessionEvent {
-  const { type, data, surface, isIgnorable } = snapshot
-  const event = deepFreeze({
-    type,
-    seq,
-    time: Date.now(),
-    data,
-    ...(isIgnorable ? { ignorable: true } : {}),
-    ...surface,
-  } as SessionEvent)
+  const { type, data, surface } = snapshot
+  const event = deepFreeze({ type, seq, time: Date.now(), data, ...surface } as SessionEvent)
   validateSessionEventData(event, `session event "${type}" at seq ${seq}`)
   return event
 }
@@ -578,14 +570,12 @@ export class Session {
   append<T extends SessionEventType>(
     type: T,
     data: SessionEventMap[T],
-    ...opts: T extends SurfaceEventType
-      ? [opts: SurfaceIntent<T> & { ignorable?: boolean }]
-      : [opts?: { ignorable?: boolean }]
+    ...opts: T extends SurfaceEventType ? [opts: SurfaceIntent<T>] : []
   ): SessionEvent<T>
   append(
     type: SessionEventType | readonly SessionEventInput[],
     data?: SessionEventMap[SessionEventType],
-    ...opts: [opts?: (SurfaceIntent & { ignorable?: boolean }) | { ignorable?: boolean }]
+    ...opts: [opts?: SurfaceIntent]
   ): SessionEvent | readonly SessionEvent[] {
     if (typeof type !== 'string') return this.#appendEvents(type)
     this.publicationEntry()

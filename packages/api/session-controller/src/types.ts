@@ -298,18 +298,13 @@ export interface SessionRenameValue {
   readonly seq: number
 }
 
-/** Workspace isolation mode for child sessions. */
-export type WorkspaceMode = 'inherit' | 'branch' | 'share'
-
 /** Session fork request. */
 export interface SessionForkRequest {
   readonly sessionId: SessionId
   /** Exact inclusive source event seq; omission selects the latest completed-turn prefix. */
   readonly atSeq?: number
-  readonly workspaceMode?: WorkspaceMode
   /** False asks the Host to check for required migration before forking. Defaults to true. */
   readonly allowMigration?: boolean
-
 }
 
 /** Identity of a newly forked Session. */

@@ -61,7 +61,6 @@ export const Config = z.object({
   maxBytes: z.number().step(1).min(1).default(8 * 1024 * 1024),
 })
 
-
 interface AcceptanceFold {
   readonly scannedEvents: SessionLogOffsetType
   readonly throughSeq: SessionSeqCursor

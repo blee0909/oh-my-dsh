@@ -328,12 +328,6 @@ function lastTurn(ctx: Context, agent: Agent | undefined): number {
   return ctx.agents.turnBoundaryOf(agent.session).lastTurn
 }
 
-/** Flatten content blocks to the text a hook payload carries (the common case). */
-export function blocksToText(content: ContentBlock[] | undefined | null): string {
-  if (!Array.isArray(content)) return ''
-  return content.filter((b): b is Extract<ContentBlock, { type: 'text' }> => b?.type === 'text').map(b => b.text).join('')
-}
-
 function base(agent: Agent | undefined, event: string): Record<string, unknown> {
   return {
     session_id: agent?.session.header.id ?? '',
